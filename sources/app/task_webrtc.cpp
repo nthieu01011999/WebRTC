@@ -3,65 +3,50 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include <iostream>
-#include <iomanip>
-#include <cstdio>
-#include <vector>
+#include "ak.h"
+#include "timer.h"
 
-#include <algorithm>
-#include <future>
-#include <iostream>
-#include <memory>
-// #include <random>
-#include <stdexcept>
-#include <thread>
-#include <unordered_map>
-#include <chrono>
-#include <pthread.h>
-
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <atomic>
-
-#include "rtc/rtc.hpp"
 #include "app.h"
-#include "app_data.h"
 #include "app_dbg.h"
-#include "task_list.h"
-#include "json.hpp"
+#include "app_data.h"
 
-using namespace rtc;
-using namespace std;
-using namespace chrono_literals;
-using namespace chrono;
-using json = nlohmann::json;
+#include "task_list.h"
+#include "task_webrtc.h"
 
 q_msg_t gw_task_webrtc_mailbox;
-std::string camIpPublic = "";
-
+void printout() {
+    std::cout << "[after] gw_task_webrtc_entry\n" << std::endl;
+}
 void *gw_task_webrtc_entry(void *) {
-	ak_msg_t *msg = AK_MSG_NULL;
-
+	
+	// std::cout << "[STARTED] gw_task_webrtc_entry\n" << std::endl;
+    APP_DBG("[STARTED] gw_task_webrtc_entry\n");
 	wait_all_tasks_started();
+    ak_msg_t *msg = AK_MSG_NULL;
 
-	APP_DBG("[STARTED] gw_task_webrtc_entry\n");
+	
+     printout();
+     
+    while (1) {
+        /* Get message */
+        msg = ak_msg_rev(GW_TASK_WEBRTC_ID);
+        if (msg == AK_MSG_NULL) {
+            APP_DBG_SIG("[ERROR] No message received\n");  
+        } else {
+            APP_DBG_SIG("[DEBUG] Message received\n");   
+        }
 
-	while (1) {
-		/* get messge */
-		msg = ak_msg_rev(GW_TASK_WEBRTC_ID);
+        switch (msg->header->sig) {
 
-		switch (msg->header->sig) {
+        default:
+            APP_DBG_SIG("[DEBUG] Unknown message signal received: %d\n", msg->header->sig);   
+            break;
+        }
 
+        /* Free message */
+        ak_msg_free(msg);
+    }
 
-		default:
-			break;
-		}
-
-		/* free message */
-		ak_msg_free(msg);
-	}
-
-	return (void *)0;
+    return (void *)0;
 }

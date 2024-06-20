@@ -72,6 +72,23 @@
         "stop_token": "cpp",
         "format": "cpp",
         "semaphore": "cpp",
-        "complex": "cpp"
+        "complex": "cpp",
+        "any": "cpp",
+        "cfenv": "cpp",
+        "coroutine": "cpp",
+        "csetjmp": "cpp",
+        "csignal": "cpp",
+        "cuchar": "cpp",
+        "list": "cpp",
+        "unordered_set": "cpp",
+        "netfwd": "cpp",
+        "source_location": "cpp",
+        "rope": "cpp",
+        "slist": "cpp",
+        "scoped_allocator": "cpp",
+        "typeindex": "cpp",
+        "barrier": "cpp",
+        "latch": "cpp",
+        "syncstream": "cpp"
     }
 }

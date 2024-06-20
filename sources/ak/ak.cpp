@@ -34,7 +34,8 @@ int main() {
 	AK_MSG_DBG("TASK LIST LEN: %d\n", ak_thread_table_len);
 
 	task_init();
-
+	// debug_task_list_initialization();
+	
 	/* Must initialize libcurl before any threads are started */
 	// curl_global_init(CURL_GLOBAL_DEFAULT); //TODO
 
@@ -75,14 +76,22 @@ int main() {
 	}
 
 	for (uint32_t index = 0; index < ak_thread_table_len; index++) {
-		pthread_join(task_list[index].pthread, NULL);
+		// pthread_cancel(task_list[index].pthread);  // Attempt to cancel the thread
+		pthread_join(task_list[index].pthread, NULL);  // Then join it
+		printf("[DEBUG] Thread %d joined\n", index);
 	}
 
+
+ 
+
+	AK_PRINT("[YOU ARE HERE] \n");
 	// curl_global_cleanup();
 	return 0;
 }
 
 void wait_all_tasks_started() {
+	AK_PRINT("[wait_all_tasks_started] \n");
+	int timeout = 10000;
 	bool check_ret = true;
 
 	pthread_mutex_lock(&mt_ak_thread_started);
@@ -103,6 +112,9 @@ void wait_all_tasks_started() {
 
 		usleep(100);
 	}
+	if (timeout <= 0) {
+        AK_PRINT("[ERROR] Timeout waiting for all tasks to start\n");
+    }
 }
 
 ak_msg_t *get_pure_msg() {
