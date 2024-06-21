@@ -3,21 +3,84 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include <iostream>
-#include "ak.h"
-#include "timer.h"
+#include <iomanip>
+#include <cstdio>
+#include <vector>
+
+#include <algorithm>
+#include <future>
+#include <iostream>
+#include <memory>
+#include <random>
+#include <stdexcept>
+#include <thread>
+#include <unordered_map>
+#include <chrono>
+#include <pthread.h>
+
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <atomic>
 
 #include "app.h"
-#include "app_dbg.h"
 #include "app_data.h"
+#include "app_config.h"
+#include "app_dbg.h"
+#include "message.h"
+// #include "datachannel_hdl.h"
 
 #include "task_list.h"
-#include "task_webrtc.h"
 
+// #include "dispatchqueue.hpp"
+// #include "helpers.hpp"
+#include "rtc/rtc.hpp"
+#include "json.hpp"
+// #include "stream.hpp"
+
+#ifdef BUILD_ARM_VVTK
+// #include "h26xsource.hpp"
+// #include "audiosource.hpp"
+#endif
+
+// #include "mtce_audio.hpp"
+// #include "parser_json.h"
+#include "utils.h"
+
+#define CLIENT_SIGNALING_MAX 20
+#define CLIENT_MAX			 10
+
+using namespace rtc;
+using namespace std;
+using namespace chrono_literals;
+using namespace chrono;
+using json = nlohmann::json;
+
+/*****************************************************************************/
+/*  task GW_TASK_WEBRTC define
+ */
+/*****************************************************************************/
+/* define  */
 q_msg_t gw_task_webrtc_mailbox;
-void printout() {
-    std::cout << "[after] gw_task_webrtc_entry\n" << std::endl;
-}
+
+
+
+/*****************************************************************************/
+/*  task GW_TASK_WEBRTC define
+ */
+/*****************************************************************************/
+/* define websocket */
+void initializeWebSocketServer();
+// std::string loadWebSocketConfig(const std::string& configFile);
+void loadWebSocketConfig();
+int8_t loadWsocketSignalingServerConfigFile(string &wsUrl);
+
+
+
+
+
 void *gw_task_webrtc_entry(void *) {
 	
 	// std::cout << "[STARTED] gw_task_webrtc_entry\n" << std::endl;
@@ -25,9 +88,8 @@ void *gw_task_webrtc_entry(void *) {
 	wait_all_tasks_started();
     ak_msg_t *msg = AK_MSG_NULL;
 
-	
-     printout();
-     
+	task_post_pure_msg(GW_TASK_WEBRTC_ID,GW_WEBRTC_INIT_WEBSOCKET);
+      
     while (1) {
         /* Get message */
         msg = ak_msg_rev(GW_TASK_WEBRTC_ID);
@@ -38,6 +100,13 @@ void *gw_task_webrtc_entry(void *) {
         }
 
         switch (msg->header->sig) {
+        case GW_WEBRTC_INIT_WEBSOCKET: {
+            initializeWebSocketServer();
+            loadWebSocketConfig();
+
+
+
+        } break;
 
         default:
             APP_DBG_SIG("[DEBUG] Unknown message signal received: %d\n", msg->header->sig);   
@@ -49,4 +118,54 @@ void *gw_task_webrtc_entry(void *) {
     }
 
     return (void *)0;
+}
+
+void initializeWebSocketServer() {
+    auto ws = make_shared<WebSocket>(); 
+    weak_ptr<WebSocket> wws = ws;
+    atomic<bool> isConnected(false);
+}
+
+// std::string loadWebSocketConfig(const std::string& configFile) {
+void loadWebSocketConfig() {
+    std::string wsUrl;
+    if (loadWsocketSignalingServerConfigFile(wsUrl) != APP_CONFIG_SUCCESS || wsUrl.empty()) {
+        APP_DBG("Failed to load WebSocket URL configuration or URL is empty.\n");
+    }
+
+    APP_DBG("Websocket: %s\n", wsUrl.c_str());
+}
+
+int8_t loadWsocketSignalingServerConfigFile(string &wsUrl) {
+    rtcServersConfig_t rtcServerCfg;
+    // Fetch the RTC server configurations stored in a JSON file
+    // Then store into rtcServersConfig_t rtcServerCfg;
+    int8_t ret = configGetRtcServers(&rtcServerCfg);
+    
+    APP_DBG("[DEBUG] Loading WebSocket Signaling Server Config...\n");
+    
+    if (ret == APP_CONFIG_SUCCESS) {
+        APP_DBG("[DEBUG] Successfully retrieved RTC server configuration.\n");
+
+        // Debug print to show the contents of rtcServerCfg
+        APP_DBG("[DEBUG] WebSocket Server URL: %s\n", rtcServerCfg.wSocketServerCfg.c_str());
+        for (const auto& url : rtcServerCfg.arrStunServerUrl) {
+            APP_DBG("[DEBUG] STUN Server URL: %s\n", url.c_str());
+        }
+        for (const auto& url : rtcServerCfg.arrTurnServerUrl) {
+            APP_DBG("[DEBUG] TURN Server URL: %s\n", url.c_str());
+        }
+        
+        wsUrl.clear();
+        if (!rtcServerCfg.wSocketServerCfg.empty()) {
+            wsUrl = rtcServerCfg.wSocketServerCfg + "/c02i24010000008"; 
+            // APP_DBG("[DEBUG] WebSocket URL constructed: %s\n", wsUrl.c_str());
+        } else {
+            APP_DBG("[ERROR] WebSocket server configuration is empty.\n");
+        }
+    } else {
+        APP_DBG("[ERROR] Failed to retrieve RTC server configuration. Error code: %d\n", ret);
+    }
+    
+    return ret;
 }

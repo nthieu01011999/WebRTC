@@ -1,3 +1,6 @@
+-include sources/app/json/Makefile.mk
+
+
 CXXFLAGS	+= -I./sources/app
 
 VPATH += sources/app
