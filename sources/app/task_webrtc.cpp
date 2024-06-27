@@ -73,11 +73,11 @@ q_msg_t gw_task_webrtc_mailbox;
 /*****************************************************************************/
 /* define websocket */
 void initializeWebSocketServer();
-// std::string loadWebSocketConfig(const std::string& configFile);
 void loadWebSocketConfig();
+void onWebSocketOpen(const shared_ptr<WebSocket>& ws);
+void onWebSocketClose(const shared_ptr<WebSocket>& ws);
+void onWebSocketError(const shared_ptr<WebSocket>& ws, const std::string& error);
 int8_t loadWsocketSignalingServerConfigFile(string &wsUrl);
-
-
 
 
 
@@ -103,9 +103,6 @@ void *gw_task_webrtc_entry(void *) {
         case GW_WEBRTC_INIT_WEBSOCKET: {
             initializeWebSocketServer();
             loadWebSocketConfig();
-
-
-
         } break;
 
         default:
@@ -123,6 +120,9 @@ void *gw_task_webrtc_entry(void *) {
 void initializeWebSocketServer() {
     auto ws = make_shared<WebSocket>(); 
     weak_ptr<WebSocket> wws = ws;
+
+
+    
     atomic<bool> isConnected(false);
 }
 
@@ -168,4 +168,16 @@ int8_t loadWsocketSignalingServerConfigFile(string &wsUrl) {
     }
     
     return ret;
+}
+
+void onWebSocketOpen(const shared_ptr<WebSocket>& ws) {
+
+}
+
+void onWebSocketClose(const shared_ptr<WebSocket>& ws) {
+    
+}
+
+void onWebSocketError(const shared_ptr<WebSocket>& ws, const std::string& error) {
+    
 }
