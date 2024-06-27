@@ -79,6 +79,12 @@ void onWebSocketClose(const shared_ptr<WebSocket>& ws);
 void onWebSocketError(const shared_ptr<WebSocket>& ws, const std::string& error);
 int8_t loadWsocketSignalingServerConfigFile(string &wsUrl);
 
+/*****************************************************************************/
+/*  task GW_TASK_WEBRTC define
+ */
+/*****************************************************************************/
+/* message handling */
+void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocket> ws);
 
 
 void *gw_task_webrtc_entry(void *) {
@@ -174,16 +180,27 @@ void initializeWebSocketServer(const std::string &wsUrl) {
 
     globalWs->onClosed([&]() {
         isConnected.store(false);
-        APP_DBG("WebSocket has closed unexpectedly.\n");
+        APP_DBG("[WEBSOCKET_ONCLOSED] has closed unexpectedly.\n");
         timer_set(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ, GW_WEBRTC_TRY_CONNECT_SOCKET_INTERVAL, TIMER_ONE_SHOT);
     });
 
     globalWs->onError([&](const string &error) {
         isConnected.store(false);
-        APP_DBG("WebSocket error: %s\n", error.c_str());
+        APP_DBG("[WEBSOCKET_ERROR] : %s\n", error.c_str());
     });
 
+	globalWs->onMessage([&](variant<binary, string> data) {
+		APP_PRINT("WebSocket connection @ ws->onMessage\n");
+		if (holds_alternative<string>(data)) {
+			string msg = get<string>(data);
+			APP_DBG("%s\n", msg.data());
+			handleWebSocketMessage(msg, globalWs);  // Pass the message to the handler
+			// If needed, you can post the message here as well, depending on your application's architecture.
+		}
+	});
+
     globalWs->open(wsUrl);
+
 
 }
 
@@ -251,4 +268,10 @@ void onWebSocketError(const shared_ptr<WebSocket>& ws, const std::string& error)
     // logError(ws, error); // Log or handle the error appropriately
     APP_PRINT("WebSocket connection failed: %s\n", error.c_str());
     // Optionally implement reconnection or other error recovery actions here
+}
+
+void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocket> ws) {
+
+    APP_DBG("[WebSocket Message Received]: %s\n", message.c_str());
+ 
 }
