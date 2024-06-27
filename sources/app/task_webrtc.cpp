@@ -64,16 +64,16 @@ using json = nlohmann::json;
 /*****************************************************************************/
 /* define  */
 q_msg_t gw_task_webrtc_mailbox;
-
-
+atomic<bool> isConnected(false);
+static shared_ptr<WebSocket> globalWs;
 
 /*****************************************************************************/
 /*  task GW_TASK_WEBRTC define
  */
 /*****************************************************************************/
 /* define websocket */
-void initializeWebSocketServer();
-void loadWebSocketConfig();
+void initializeWebSocketServer(const std::string &wsUrl);
+std::string loadWebSocketConfig();
 void onWebSocketOpen(const shared_ptr<WebSocket>& ws);
 void onWebSocketClose(const shared_ptr<WebSocket>& ws);
 void onWebSocketError(const shared_ptr<WebSocket>& ws, const std::string& error);
@@ -101,8 +101,24 @@ void *gw_task_webrtc_entry(void *) {
 
         switch (msg->header->sig) {
         case GW_WEBRTC_INIT_WEBSOCKET: {
-            initializeWebSocketServer();
-            loadWebSocketConfig();
+            APP_DBG_SIG("[GW_WEBRTC_INIT_WEBSOCKET]\n"); 
+            auto wsUrl = loadWebSocketConfig();  
+            initializeWebSocketServer(wsUrl);
+            
+            
+        } break;
+
+        case GW_WEBRTC_TRY_CONNECT_SOCKET_REQ: {
+            APP_DBG_SIG("GW_WEBRTC_TRY_CONNECT_SOCKET_REQ");
+            globalWs->close();
+            if (globalWs->isClosed()) {
+                std::string wsUrl = "ws://sig.espitek.com:8089/";
+                APP_DBG("try connect to websocket: %s\n", wsUrl.data());
+                globalWs->open(wsUrl);
+                timer_set(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ, GW_WEBRTC_TRY_CONNECT_SOCKET_INTERVAL, TIMER_ONE_SHOT);
+			
+            }
+
         } break;
 
         default:
@@ -117,43 +133,60 @@ void *gw_task_webrtc_entry(void *) {
     return (void *)0;
 }
 
-void initializeWebSocketServer() {
-    auto ws = make_shared<WebSocket>(); 
-    weak_ptr<WebSocket> wws = ws;
+void initializeWebSocketServer(const std::string &wsUrl) {
+    // auto ws = make_shared<WebSocket>();
+    // weak_ptr<WebSocket> wws = ws;
+    globalWs = std::make_shared<WebSocket>();
+    APP_DBG("[initializeWebSocketServer]\n");
 
+    globalWs->onOpen([&]() {
+        isConnected.store(true);
+        APP_DBG("WebSocket has opened successfully.\n");
+    });
 
-    
-    atomic<bool> isConnected(false);
+    globalWs->onClosed([&]() {
+        isConnected.store(false);
+        APP_DBG("WebSocket has closed unexpectedly.\n");
+    });
+
+    globalWs->onError([&](const string &error) {
+        isConnected.store(false);
+        APP_DBG("WebSocket error: %s\n", error.c_str());
+    });
+
+    globalWs->open(wsUrl);
+
 }
 
-// std::string loadWebSocketConfig(const std::string& configFile) {
-void loadWebSocketConfig() {
+
+
+std::string loadWebSocketConfig() {
     std::string wsUrl;
     if (loadWsocketSignalingServerConfigFile(wsUrl) != APP_CONFIG_SUCCESS || wsUrl.empty()) {
         APP_DBG("Failed to load WebSocket URL configuration or URL is empty.\n");
     }
-
     APP_DBG("Websocket: %s\n", wsUrl.c_str());
+    return wsUrl;
 }
 
 int8_t loadWsocketSignalingServerConfigFile(string &wsUrl) {
     rtcServersConfig_t rtcServerCfg;
-    // Fetch the RTC server configurations stored in a JSON file
-    // Then store into rtcServersConfig_t rtcServerCfg;
+    /*Fetch the RTC server configurations stored in a JSON file
+    Then store into rtcServersConfig_t rtcServerCfg;*/
     int8_t ret = configGetRtcServers(&rtcServerCfg);
     
-    APP_DBG("[DEBUG] Loading WebSocket Signaling Server Config...\n");
+    // APP_DBG("[DEBUG] Loading WebSocket Signaling Server Config...\n");
     
     if (ret == APP_CONFIG_SUCCESS) {
-        APP_DBG("[DEBUG] Successfully retrieved RTC server configuration.\n");
+        // APP_DBG("[DEBUG] Successfully retrieved RTC server configuration.\n");
 
         // Debug print to show the contents of rtcServerCfg
-        APP_DBG("[DEBUG] WebSocket Server URL: %s\n", rtcServerCfg.wSocketServerCfg.c_str());
+        // APP_DBG("[DEBUG] WebSocket Server URL: %s\n", rtcServerCfg.wSocketServerCfg.c_str());
         for (const auto& url : rtcServerCfg.arrStunServerUrl) {
-            APP_DBG("[DEBUG] STUN Server URL: %s\n", url.c_str());
+            // APP_DBG("[DEBUG] STUN Server URL: %s\n", url.c_str());
         }
         for (const auto& url : rtcServerCfg.arrTurnServerUrl) {
-            APP_DBG("[DEBUG] TURN Server URL: %s\n", url.c_str());
+            // APP_DBG("[DEBUG] TURN Server URL: %s\n", url.c_str());
         }
         
         wsUrl.clear();
@@ -170,14 +203,23 @@ int8_t loadWsocketSignalingServerConfigFile(string &wsUrl) {
     return ret;
 }
 
+// WebSocket event handlers
 void onWebSocketOpen(const shared_ptr<WebSocket>& ws) {
-
+    // isConnected.store(true);
+    // storeConnection(ws); // Assign an ID and store the connection in a map or similar structure
+    APP_PRINT("WebSocket connected, signaling ready\n");
 }
 
 void onWebSocketClose(const shared_ptr<WebSocket>& ws) {
-    
+    // isConnected.store(false);
+    // removeConnection(ws); // Clean up and remove the connection from management
+    APP_PRINT("WebSocket closed\n");
+    // timer_set(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ, GW_WEBRTC_TRY_CONNECT_SOCKET_INTERVAL, TIMER_ONE_SHOT);
 }
 
 void onWebSocketError(const shared_ptr<WebSocket>& ws, const std::string& error) {
-    
+    // isConnected.store(false);
+    // logError(ws, error); // Log or handle the error appropriately
+    APP_PRINT("WebSocket connection failed: %s\n", error.c_str());
+    // Optionally implement reconnection or other error recovery actions here
 }
