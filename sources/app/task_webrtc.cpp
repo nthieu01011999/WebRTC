@@ -116,10 +116,37 @@ void *gw_task_webrtc_entry(void *) {
                 APP_DBG("try connect to websocket: %s\n", wsUrl.data());
                 globalWs->open(wsUrl);
                 timer_set(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ, GW_WEBRTC_TRY_CONNECT_SOCKET_INTERVAL, TIMER_ONE_SHOT);
-			
+
             }
 
         } break;
+
+
+// void attemptReconnect(const std::string &wsUrl, int attempt = 1) {
+//     if (attempt > 3) {
+//         APP_DBG("Max reconnection attempts reached.\n");
+//         return;
+//     }
+//     std::this_thread::sleep_for(std::chrono::seconds(attempt * 2));  // Exponential back-off
+//     APP_DBG("Attempting to reconnect. Attempt: %d\n", attempt);
+//     initializeWebSocketServer(wsUrl);  // Reinitialize the WebSocket connection
+// }
+
+// // Modify the onClosed and onError to use attemptReconnect
+// ws->onClosed([wsUrl]() {
+//     isConnected.store(false);
+//     APP_DBG("WebSocket closed unexpectedly. URL: %s\n", wsUrl.c_str());
+//     attemptReconnect(wsUrl);
+// });
+
+// ws->onError([wsUrl](const string &error) {
+//     isConnected.store(false);
+//     APP_DBG("WebSocket error at URL %s: %s\n", wsUrl.c_str(), error.c_str());
+//     attemptReconnect(wsUrl);
+// });
+
+
+
 
         default:
             APP_DBG_SIG("[DEBUG] Unknown message signal received: %d\n", msg->header->sig);   
@@ -142,11 +169,13 @@ void initializeWebSocketServer(const std::string &wsUrl) {
     globalWs->onOpen([&]() {
         isConnected.store(true);
         APP_DBG("WebSocket has opened successfully.\n");
+        timer_remove_attr(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ);
     });
 
     globalWs->onClosed([&]() {
         isConnected.store(false);
         APP_DBG("WebSocket has closed unexpectedly.\n");
+        timer_set(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ, GW_WEBRTC_TRY_CONNECT_SOCKET_INTERVAL, TIMER_ONE_SHOT);
     });
 
     globalWs->onError([&](const string &error) {
