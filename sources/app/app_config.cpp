@@ -108,6 +108,6 @@ int configGetRtcServers(rtcServersConfig_t *rtcServerCfg) {
     }
 
     // Debugging print to show what has been loaded
-    APP_DBG("rtc server config: %s\n", cfgJs.dump().data());
+    // APP_DBG("rtc server config: %s\n", cfgJs.dump().data());
     return APP_CONFIG_SUCCESS;
 }

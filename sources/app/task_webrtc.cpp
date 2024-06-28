@@ -74,9 +74,6 @@ static shared_ptr<WebSocket> globalWs;
 /* define websocket */
 void initializeWebSocketServer(const std::string &wsUrl);
 std::string loadWebSocketConfig();
-void onWebSocketOpen(const shared_ptr<WebSocket>& ws);
-void onWebSocketClose(const shared_ptr<WebSocket>& ws);
-void onWebSocketError(const shared_ptr<WebSocket>& ws, const std::string& error);
 int8_t loadWsocketSignalingServerConfigFile(string &wsUrl);
 
 /*****************************************************************************/
@@ -85,7 +82,7 @@ int8_t loadWsocketSignalingServerConfigFile(string &wsUrl);
 /*****************************************************************************/
 /* message handling */
 void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocket> ws);
-
+void handleClientRequest(const std::string& clientId, std::shared_ptr<WebSocket> ws);
 
 void *gw_task_webrtc_entry(void *) {
 	
@@ -249,29 +246,48 @@ int8_t loadWsocketSignalingServerConfigFile(string &wsUrl) {
     return ret;
 }
 
-// WebSocket event handlers
-void onWebSocketOpen(const shared_ptr<WebSocket>& ws) {
-    // isConnected.store(true);
-    // storeConnection(ws); // Assign an ID and store the connection in a map or similar structure
-    APP_PRINT("WebSocket connected, signaling ready\n");
-}
-
-void onWebSocketClose(const shared_ptr<WebSocket>& ws) {
-    // isConnected.store(false);
-    // removeConnection(ws); // Clean up and remove the connection from management
-    APP_PRINT("WebSocket closed\n");
-    // timer_set(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ, GW_WEBRTC_TRY_CONNECT_SOCKET_INTERVAL, TIMER_ONE_SHOT);
-}
-
-void onWebSocketError(const shared_ptr<WebSocket>& ws, const std::string& error) {
-    // isConnected.store(false);
-    // logError(ws, error); // Log or handle the error appropriately
-    APP_PRINT("WebSocket connection failed: %s\n", error.c_str());
-    // Optionally implement reconnection or other error recovery actions here
-}
-
 void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocket> ws) {
 
     APP_DBG("[WebSocket Message Received]: %s\n", message.c_str());
- 
+    if (ws && ws ->isOpen()) {
+        APP_DBG("safe to use\n");
+    } else {
+        APP_DBG("WebSocket is not open or not available.\n");
+    }
+
+    try {
+        json messageJson = json::parse(message);
+        APP_DBG("Parser: %s\n", messageJson.dump(4).c_str());
+
+        auto typeIt = messageJson.find("Type");
+        if (typeIt != messageJson.end()) {
+            std::string type = typeIt->get<string>();
+
+            if (type == "request") {
+                auto clientIdIt = messageJson.find("ClientId");
+                if (clientIdIt != messageJson.end()) {
+                    std::string clientId = clientIdIt->get<string>();
+                    APP_DBG("Handling request for Client ID: %s\n", clientId.c_str());
+                    handleClientRequest(clientId, ws);
+                } else {
+                    APP_DBG("Error: ClientId not found in request message\n");
+                }
+            } else if (type == "candidate") {
+
+            } else if (type == "answer") {
+
+            } else {
+
+            }
+        } else {
+            APP_DBG("Error: Message type not specified\n");
+        }
+
+    } catch (const json::exception& e) {
+        APP_DBG("[JSON Parsing Error] %s\n", e.what());
+    }
+}
+
+void handleClientRequest(const std::string& clientId, std::shared_ptr<WebSocket> ws) {
+    APP_DBG("Initiating peer connection for Client ID: %s\n", clientId.c_str());
 }

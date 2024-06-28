@@ -1,4 +1,5 @@
 -include sources/app/json/Makefile.mk
+-include sources/app/webrtc/Makefile.mk
 
 
 CXXFLAGS	+= -I./sources/app
