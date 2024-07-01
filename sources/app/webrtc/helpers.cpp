@@ -1,11 +1,4 @@
-/**
- * libdatachannel streamer example
- * Copyright (c) 2020 Filip Klembara (in2core)
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
+ 
 
 #include "helpers.hpp"
 #include "utils.h"
@@ -56,4 +49,8 @@ void Client::setSignalingStatus(bool value) {
 	pthread_mutex_lock(&mtxSignaling);
 	isSignalingRunning = value;
 	pthread_mutex_unlock(&mtxSignaling);
+}
+
+void Client::setId(const string &newId) {
+	mId = newId;
 }

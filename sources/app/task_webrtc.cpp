@@ -29,13 +29,12 @@
 #include "app_data.h"
 #include "app_config.h"
 #include "app_dbg.h"
-#include "message.h"
 // #include "datachannel_hdl.h"
 
 #include "task_list.h"
 
 // #include "dispatchqueue.hpp"
-// #include "helpers.hpp"
+#include "helpers.hpp"
 #include "rtc/rtc.hpp"
 #include "json.hpp"
 // #include "stream.hpp"
@@ -66,6 +65,9 @@ using json = nlohmann::json;
 q_msg_t gw_task_webrtc_mailbox;
 atomic<bool> isConnected(false);
 static shared_ptr<WebSocket> globalWs;
+// ClientsGroup_t clients;
+static Configuration rtcConfig;
+std::unordered_map<std::string, std::shared_ptr<PeerConnection>> peerConnections;
 
 /*****************************************************************************/
 /*  task GW_TASK_WEBRTC define
@@ -83,6 +85,17 @@ int8_t loadWsocketSignalingServerConfigFile(string &wsUrl);
 /* message handling */
 void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocket> ws);
 void handleClientRequest(const std::string& clientId, std::shared_ptr<WebSocket> ws);
+
+
+/*****************************************************************************/
+/*  task GW_TASK_WEBRTC define
+ */
+/*****************************************************************************/
+/* WebRTC handling */
+
+shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr<WebSocket> wws, const string& id);
+
+
 
 void *gw_task_webrtc_entry(void *) {
 	
@@ -290,4 +303,36 @@ void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocke
 
 void handleClientRequest(const std::string& clientId, std::shared_ptr<WebSocket> ws) {
     APP_DBG("Initiating peer connection for Client ID: %s\n", clientId.c_str());
+    if (Client::totalClientsConnectSuccess <= CLIENT_MAX && clients.size() <= CLIENT_SIGNALING_MAX) {
+        Client::setSignalingStatus(true);
+        std::shared_ptr<Client> newClient = createPeerConnection(rtcConfig, make_weak_ptr(ws), clientId); 
+        //shared pointer is created but not stored beyond the scope of the if block 
+        //Make strong consideration here
+        peerConnections[clientId] = newClient->peerConnection;
+        clients[clientId] = newClient;
+
+    }
+}
+
+shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr<WebSocket> wws, const string& id) {
+    if (wws.expired()) {
+        APP_DBG("WebSocket pointer expired before creating PeerConnection for client ID: %s\n", id.c_str());
+        return nullptr;
+    } else {
+        APP_DBG("[WebSocket: ALIVE]\n");
+    }
+
+    APP_DBG("call createPeerConnection()\n");
+    auto pc = make_shared<PeerConnection>(rtcConfig);
+    APP_DBG("PeerConnection created successfully.\n");
+    auto client = make_shared<Client>(pc);
+    client->setId(id);
+    // APP_DBG("wait 10s\n");
+    // std::this_thread::sleep_for(std::chrono::seconds(10));
+    // APP_DBG("after waited\n");
+    pc->onStateChange([id](PeerConnection::State state) {
+
+    });
+    
+    return client;
 }

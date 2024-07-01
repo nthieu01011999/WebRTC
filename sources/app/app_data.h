@@ -8,12 +8,12 @@
 #include <string>
 #include "ak.h"
 // #include "mtce_parameter.h"
-// #include "helpers.hpp"
+#include "helpers.hpp"
 // #include "mtce_video.hpp"
 #define TEST_USE_WEB_SOCKET 1
 #define CHECK_TIME_EXE		0
 
-// extern ClientsGroup_t clients;
+extern ClientsGroup_t clients;
 
 // typedef struct {
 // 	char clientId[30];

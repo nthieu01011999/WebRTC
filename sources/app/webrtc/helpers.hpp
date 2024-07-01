@@ -1,11 +1,4 @@
-/**
- * libdatachannel streamer example
- * Copyright (c) 2020 Filip Klembara (in2core)
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/.
- */
+ 
 
 #ifndef helpers_hpp
 #define helpers_hpp
@@ -21,75 +14,30 @@
 
 using namespace std;
 
-typedef struct t_fileDownloadInfo {
-	string type;
-	string path;
-	uint32_t size;
-} fileDownloadInfo_t;
 
-struct ClientTrackData {
-	std::shared_ptr<rtc::Track> track;
-	std::shared_ptr<rtc::RtcpSrReporter> sender;
-
-	ClientTrackData(std::shared_ptr<rtc::Track> track, std::shared_ptr<rtc::RtcpSrReporter> sender) {
-		this->track	 = track;
-		this->sender = sender;
-	}
-};
-
-struct ClientTrack {
-	std::string id;
-	std::shared_ptr<ClientTrackData> trackData;
-
-	ClientTrack(std::string id, std::shared_ptr<ClientTrackData> trackData) {
-		this->id		= id;
-		this->trackData = trackData;
-	}
-};
 
 class Client {
 public:
-	enum class State {
-		Waiting,
-		WaitingForVideo,
-		WaitingForAudio,
-		Ready
-	};
-
-	enum class eOptions {
-		Idle,
-		LiveStream,
-		Playback,
-	};
-
-	enum class ePushToTalkREQStatus {
-		Begin,
-		Stop
-	};
 
 	Client(std::shared_ptr<rtc::PeerConnection> pc);
 	~Client();
 
+	static std::atomic<int> totalClientsConnectSuccess;
+	std::atomic<bool> mIsSignalingOk;
+
+	std::string getId();
+	void setId(const std::string &newId);
 	static void setSignalingStatus(bool value);
+	const std::shared_ptr<rtc::PeerConnection> &peerConnection = _peerConnection;
 
 	/* Media Stream Methods (Live & PLayBack) */
 
-
-
-
-public:
-
-	static std::atomic<int> totalClientsConnectSuccess;
-	static std::string currentClientPushToTalk;
-	std::atomic<bool> mIsSignalingOk;
-	
 private:
 
-	pthread_mutex_t mPOSIXMutex, mDownloadMutex;
-	State mState = State::Waiting;
 	std::string mId;
 	std::shared_ptr<rtc::PeerConnection> _peerConnection;
-
+	pthread_mutex_t mPOSIXMutex, mDownloadMutex;
+	
 	static pthread_mutex_t mtxSignaling;
 	static bool isSignalingRunning;
 };
