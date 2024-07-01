@@ -137,6 +137,18 @@ void *gw_task_webrtc_entry(void *) {
 
         } break;
 
+        case GW_WEBRTC_ERASE_CLIENT_REQ: {
+            APP_DBG_SIG("GW_WEBRTC_ERASE_CLIENT_REQ\n");
+            string id((char *)msg->header->payload);
+            APP_PRINT("clear client id: %s\n", id.c_str());
+            Client::setSignalingStatus(true);
+            // lockMutexListClients();
+            clients.erase(id);
+            // unlockMutexListClients();
+            Client::setSignalingStatus(false);
+
+            // printAllClients();
+		} break;
 
 // void attemptReconnect(const std::string &wsUrl, int attempt = 1) {
 //     if (attempt > 3) {
@@ -160,9 +172,6 @@ void *gw_task_webrtc_entry(void *) {
 //     APP_DBG("WebSocket error at URL %s: %s\n", wsUrl.c_str(), error.c_str());
 //     attemptReconnect(wsUrl);
 // });
-
-
-
 
         default:
             APP_DBG_SIG("[DEBUG] Unknown message signal received: %d\n", msg->header->sig);   
@@ -310,7 +319,6 @@ void handleClientRequest(const std::string& clientId, std::shared_ptr<WebSocket>
         //Make strong consideration here
         peerConnections[clientId] = newClient->peerConnection;
         clients[clientId] = newClient;
-
     }
 }
 
@@ -321,7 +329,7 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
     } else {
         APP_DBG("[WebSocket: ALIVE]\n");
     }
-
+    
     APP_DBG("call createPeerConnection()\n");
     auto pc = make_shared<PeerConnection>(rtcConfig);
     APP_DBG("PeerConnection created successfully.\n");
@@ -330,9 +338,15 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
     // APP_DBG("wait 10s\n");
     // std::this_thread::sleep_for(std::chrono::seconds(10));
     // APP_DBG("after waited\n");
-    pc->onStateChange([id](PeerConnection::State state) {
+	pc->onStateChange([id](PeerConnection::State state) {
+		APP_DBG("State: %d\n", (int)state);
+		if (state == PeerConnection::State::Disconnected || state == PeerConnection::State::Failed || state == PeerConnection::State::Closed) {
+			// remove disconnected client
+			APP_DBG("call erase client from lib\n");
+			systemTimer.add(milliseconds(100),
+							[id](CppTime::timer_id) { task_post_dynamic_msg(GW_TASK_WEBRTC_ID, GW_WEBRTC_ERASE_CLIENT_REQ, (uint8_t *)id.c_str(), id.length() + 1); });
+		}
+	});
 
-    });
-    
     return client;
 }

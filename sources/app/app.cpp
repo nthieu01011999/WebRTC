@@ -11,6 +11,8 @@
 #include "app_data.h"
 #include "task_list.h"
 
+CppTime::Timer systemTimer;
+
 void exit_app(int ret);
 
 void task_init() {

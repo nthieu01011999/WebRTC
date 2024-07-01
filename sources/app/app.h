@@ -3,7 +3,8 @@
 
 #include <string>
 #include "ak.h"
-
+#include "app_config.h"
+#include "cpptime.h"
 
 using namespace std;
 
@@ -324,5 +325,7 @@ enum {
 
 #define APP_FLAG_OFF (0x00)
 #define APP_FLAG_ON	 (0x01)
+
+extern CppTime::Timer systemTimer;
 
 #endif	  // __APP_H__
