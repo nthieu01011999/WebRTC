@@ -3,12 +3,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include <iostream>
 #include <iomanip>
 #include <cstdio>
 #include <vector>
-
 #include <algorithm>
 #include <future>
 #include <iostream>
@@ -19,37 +17,29 @@
 #include <unordered_map>
 #include <chrono>
 #include <pthread.h>
-
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <atomic>
-
 #include "app.h"
 #include "app_data.h"
 #include "app_config.h"
 #include "app_dbg.h"
-// #include "datachannel_hdl.h"
-
+#include "datachannel_hdl.h"
 #include "task_list.h"
-
-// #include "dispatchqueue.hpp"
 #include "helpers.hpp"
 #include "rtc/rtc.hpp"
 #include "json.hpp"
-// #include "stream.hpp"
-
+#include "stream.hpp"
 #ifdef BUILD_ARM_VVTK
-// #include "h26xsource.hpp"
-// #include "audiosource.hpp"
+#include "h26xsource.hpp"
+#include "audiosource.hpp"
 #endif
-
-// #include "mtce_audio.hpp"
-// #include "parser_json.h"
+#include "parser_json.h"
 #include "utils.h"
 
 #define CLIENT_SIGNALING_MAX 20
-#define CLIENT_MAX			 10
+#define CLIENT_MAX 10
 
 using namespace rtc;
 using namespace std;
@@ -57,221 +47,406 @@ using namespace chrono_literals;
 using namespace chrono;
 using json = nlohmann::json;
 
-/*****************************************************************************/
-/*  task GW_TASK_WEBRTC define
- */
-/*****************************************************************************/
-/* define  */
+// Global variables
 q_msg_t gw_task_webrtc_mailbox;
-atomic<bool> isConnected(false);
-static shared_ptr<WebSocket> globalWs;
-// ClientsGroup_t clients;
+std::shared_ptr<WebSocket> globalWebSocket;
 static Configuration rtcConfig;
 std::unordered_map<std::string, std::shared_ptr<PeerConnection>> peerConnections;
+atomic<bool> isConnected(false);
 
-/*****************************************************************************/
-/*  task GW_TASK_WEBRTC define
- */
-/*****************************************************************************/
-/* define websocket */
-void initializeWebSocketServer(const std::string &wsUrl);
-std::string loadWebSocketConfig();
-int8_t loadWsocketSignalingServerConfigFile(string &wsUrl);
+// Function declarations
+shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr<WebSocket> wws, const string& id);
+static int8_t loadWsocketSignalingServerConfigFile(string &wsUrl);
+static int8_t loadIceServersConfigFile(Configuration &rtcConfig);
 
-/*****************************************************************************/
-/*  task GW_TASK_WEBRTC define
- */
-/*****************************************************************************/
-/* message handling */
 void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocket> ws);
 void handleClientRequest(const std::string& clientId, std::shared_ptr<WebSocket> ws);
+void handleAnswer(const std::string& id, const json& message);
 
+static void addToStream(shared_ptr<Client> client, bool isAddingVideo);
+static void startStream();
+static shared_ptr<Stream> createStream(void);
+static shared_ptr<ClientTrackData> addVideo(const shared_ptr<PeerConnection> pc, const uint8_t payloadType, const uint32_t ssrc, const string cname, const string msid, const function<void(void)> onOpen);
+static shared_ptr<ClientTrackData> addAudio(const shared_ptr<PeerConnection> pc, const uint8_t payloadType, const uint32_t ssrc, const string cname, const string msid, const function<void(void)> onOpen, std::string id);
+void periodicClientCheck();
+void startPeriodicCheck();
 
-/*****************************************************************************/
-/*  task GW_TASK_WEBRTC define
- */
-/*****************************************************************************/
-/* WebRTC handling */
+void initializeWebSocketServer(const std::string &wsUrl);
 
-shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr<WebSocket> wws, const string& id);
-
-
-
+//done
 void *gw_task_webrtc_entry(void *) {
-	
-	// std::cout << "[STARTED] gw_task_webrtc_entry\n" << std::endl;
-    APP_DBG("[STARTED] gw_task_webrtc_entry\n");
-	wait_all_tasks_started();
     ak_msg_t *msg = AK_MSG_NULL;
 
-	task_post_pure_msg(GW_TASK_WEBRTC_ID,GW_WEBRTC_INIT_WEBSOCKET);
-      
+    wait_all_tasks_started();
+    APP_DBG("[STARTED] gw_task_webrtc_entry\n");
+
+    if (loadIceServersConfigFile(rtcConfig) != APP_CONFIG_SUCCESS) {
+        APP_PRINT("Failed to load ICE servers configuration.\n");
+        return AK_MSG_NULL;  // Exit if configuration fails
+    }
+
+    rtcConfig.disableAutoNegotiation = false;  // Set localDescription automatically
+
+    auto ws = make_shared<WebSocket>();
+    weak_ptr<WebSocket> wws = ws;
+    atomic<bool> isConnected(false);
+
+    initializeWebSocketServer("ws://sig.espitek.com:8089/" + mtce_getSerialInfo());
+
+    std::this_thread::sleep_for(1s);
+
+    if (isConnected.load()) {
+        APP_PRINT("WebSocket is successfully connected.\n");
+    } else {
+        APP_PRINT("WebSocket connection failed or is still in progress.\n");
+    }
+
+    startPeriodicCheck();
+
     while (1) {
-        /* Get message */
         msg = ak_msg_rev(GW_TASK_WEBRTC_ID);
-        if (msg == AK_MSG_NULL) {
-            APP_DBG_SIG("[ERROR] No message received\n");  
-        } else {
-            APP_DBG_SIG("[DEBUG] Message received\n");   
-        }
 
         switch (msg->header->sig) {
-        case GW_WEBRTC_INIT_WEBSOCKET: {
-            APP_DBG_SIG("[GW_WEBRTC_INIT_WEBSOCKET]\n"); 
-            auto wsUrl = loadWebSocketConfig();  
-            initializeWebSocketServer(wsUrl);
-            
-            
-        } break;
-
-        case GW_WEBRTC_TRY_CONNECT_SOCKET_REQ: {
-            APP_DBG_SIG("GW_WEBRTC_TRY_CONNECT_SOCKET_REQ");
-            globalWs->close();
-            if (globalWs->isClosed()) {
-                std::string wsUrl = "ws://sig.espitek.com:8089/";
-                APP_DBG("try connect to websocket: %s\n", wsUrl.data());
-                globalWs->open(wsUrl);
-                timer_set(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ, GW_WEBRTC_TRY_CONNECT_SOCKET_INTERVAL, TIMER_ONE_SHOT);
-
-            }
-
-        } break;
-
         case GW_WEBRTC_ERASE_CLIENT_REQ: {
             APP_DBG_SIG("GW_WEBRTC_ERASE_CLIENT_REQ\n");
             string id((char *)msg->header->payload);
             APP_PRINT("clear client id: %s\n", id.c_str());
             Client::setSignalingStatus(true);
-            // lockMutexListClients();
+            lockMutexListClients();
             clients.erase(id);
-            // unlockMutexListClients();
+            unlockMutexListClients();
             Client::setSignalingStatus(false);
+        } break;
 
-            // printAllClients();
-		} break;
-
-// void attemptReconnect(const std::string &wsUrl, int attempt = 1) {
-//     if (attempt > 3) {
-//         APP_DBG("Max reconnection attempts reached.\n");
-//         return;
-//     }
-//     std::this_thread::sleep_for(std::chrono::seconds(attempt * 2));  // Exponential back-off
-//     APP_DBG("Attempting to reconnect. Attempt: %d\n", attempt);
-//     initializeWebSocketServer(wsUrl);  // Reinitialize the WebSocket connection
-// }
-
-// // Modify the onClosed and onError to use attemptReconnect
-// ws->onClosed([wsUrl]() {
-//     isConnected.store(false);
-//     APP_DBG("WebSocket closed unexpectedly. URL: %s\n", wsUrl.c_str());
-//     attemptReconnect(wsUrl);
-// });
-
-// ws->onError([wsUrl](const string &error) {
-//     isConnected.store(false);
-//     APP_DBG("WebSocket error at URL %s: %s\n", wsUrl.c_str(), error.c_str());
-//     attemptReconnect(wsUrl);
-// });
+        case GW_WEBRTC_ON_MESSAGE_CONTROL_DATACHANNEL_REQ: {
+            APP_DBG_SIG("GW_WEBRTC_ON_MESSAGE_CONTROL_DATACHANNEL_REQ\n");
+            try {
+                json message = json::parse(string((char *)msg->header->payload, msg->header->len));
+                string id = message["ClientId"].get<string>();
+                string data = message["Data"].get<string>();
+                string resp = "";
+                APP_DBG("client id: %s, msg: %s\n", id.c_str(), data.c_str());
+                onDataChannelHdl(id, data, resp);
+                sendMsgControlDataChannel(id, resp);
+            } catch (const exception &error) {
+                APP_DBG("%s\n", error.what());
+            }
+        } break;
 
         default:
-            APP_DBG_SIG("[DEBUG] Unknown message signal received: %d\n", msg->header->sig);   
+            APP_DBG_SIG("[DEBUG] Unknown message signal received: %d\n", msg->header->sig);
             break;
         }
 
-        /* Free message */
         ak_msg_free(msg);
     }
 
     return (void *)0;
 }
+//done
 
+//PeerConnection Creation and Management
+shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr<WebSocket> wws, const string& id) {
+    if (wws.expired()) {
+        APP_DBG("WebSocket pointer expired before creating PeerConnection for client ID: %s\n", id.c_str());
+        return nullptr;
+    }
+
+    auto ws = wws.lock();
+    APP_DBG("[WebSocket: ALIVE]\n");
+
+    APP_DBG("RTC Configuration for Client ID: %s\n", id.c_str());
+    for (const auto& server : rtcConfig.iceServers) {
+        APP_DBG("\tHostname: %s, Port: %d, Username: %s, Password: %s, RelayType: %d\n",
+                server.hostname.c_str(), server.port, server.username.c_str(), server.password.c_str(), static_cast<int>(server.relayType));
+    }
+
+    APP_DBG("Attempting to create PeerConnection...\n");
+    shared_ptr<PeerConnection> pc;
+    try {
+        pc = make_shared<PeerConnection>(rtcConfig);
+        if (!pc) {
+            throw runtime_error("Failed to instantiate PeerConnection.");
+        }
+    } catch (const std::exception& e) {
+        APP_DBG("[ERROR] Failed to create PeerConnection for Client ID: %s: %s\n", id.c_str(), e.what());
+        return nullptr; 
+    }
+    APP_DBG("PeerConnection successfully created for Client ID: %s.\n", id.c_str());
+
+    auto client = make_shared<Client>(pc);
+    client->setId(id);
+
+    pc->onStateChange([id](PeerConnection::State state) {
+        APP_DBG("State: %d\n", static_cast<int>(state));
+        if (state == PeerConnection::State::Disconnected || state == PeerConnection::State::Failed || state == PeerConnection::State::Closed) {
+            APP_DBG("call erase client from lib\n");
+            systemTimer.add(milliseconds(100),
+                            [id](CppTime::timer_id) { task_post_dynamic_msg(GW_TASK_WEBRTC_ID, GW_WEBRTC_ERASE_CLIENT_REQ, (uint8_t *)id.c_str(), id.length() + 1); });
+        }
+    });
+
+    pc->onGatheringStateChange([wpc = make_weak_ptr(pc), id, wws](PeerConnection::GatheringState state) {
+        APP_DBG("[onGatheringStateChange] %d for Client ID: %s\n", static_cast<int>(state), id.c_str());
+        if (state == PeerConnection::GatheringState::Complete) {
+            auto pc = wpc.lock();
+            if (!pc) {
+                APP_DBG("PeerConnection weak_ptr expired for client: %s.\n", id.c_str());
+                return;
+            }
+
+            auto description = pc->localDescription();
+            if (!description) {
+                APP_DBG("Failed to get local description for client: %s.\n", id.c_str());
+                return;
+            }
+
+            json message = {
+                {"ClientId", id},
+                {"Type", description->typeString()},
+                {"Sdp", string(description.value())}
+            };
+
+            APP_DBG("[BEFORE] Sent SDP to WebSocket: %s\n", message.dump().c_str());
+
+            if (auto ws = wws.lock()) {
+                try {
+                    if (ws->isOpen()) {
+                        ws->send(message.dump());
+                        APP_DBG("Sent SDP to WebSocket for client: %s.\n", id.c_str());
+                    } else {
+                        APP_DBG("WebSocket is not open for client: %s.\n", id.c_str());
+                    }
+                } catch (const std::exception& e) {
+                    APP_DBG("Exception while sending message for client: %s: %s\n", id.c_str(), e.what());
+                }
+            } else {
+                APP_DBG("WebSocket weak_ptr expired for client: %s.\n", id.c_str());
+            }
+        }
+    });
+
+    pc->onLocalCandidate([id, wpc = make_weak_ptr(pc)](const Candidate &candidate) {
+        APP_DBG("Entered onLocalCandidate callback for client: %s.\n", id.c_str());
+        if (wpc.expired()) {
+            APP_DBG("PeerConnection weak pointer expired for client: %s.\n", id.c_str());
+            return;
+        }
+        
+        auto lockedPc = wpc.lock();
+        if (!lockedPc) {
+            APP_DBG("Failed to lock PeerConnection for client: %s.\n", id.c_str());
+            return;
+        }
+        
+        APP_DBG("PeerConnection locked successfully for client: %s.\n", id.c_str());
+        
+        json message = {
+            {"Type", "candidate"},
+            {"Candidate", candidate.candidate()},
+            {"SdpMid", candidate.mid()},
+            {"ClientId", id}
+        };
+        std::cout << message.dump(4) << std::endl;
+
+        std::string message_str = message.dump();
+        APP_DBG("JSON message constructed for client: %s, message: %s\n", id.c_str(), message_str.c_str());
+
+        try {
+            task_post_dynamic_msg(GW_TASK_HELLO_ID, GW_WEBRTC_ICE_CANDIDATE, (uint8_t *)message_str.data(), message_str.length() + 1);
+            APP_DBG("ICE candidate message posted successfully for client: %s.\n", id.c_str());
+        } catch (const std::exception& e) {
+            APP_DBG("Exception caught while posting ICE candidate message for client: %s: %s\n", id.c_str(), e.what());
+        }
+    });
+
+    client->video = addVideo(pc, 102, 1, "VideoStream", "Stream", [id, wc = make_weak_ptr(client)]() {
+        APP_DBG("[addVideo] open addVideo label\n");
+        if (auto c = wc.lock()) {
+            addToStream(c, true);
+        }
+        APP_DBG("Video from %s opened\n", id.c_str());
+    });
+
+    client->audio = addAudio(pc, 8, 2, "AudioStream", "Stream", [id, wc = make_weak_ptr(client)]() {
+        APP_DBG("[addAudio] open addAudio label\n");
+        if (auto c = wc.lock()) {
+            addToStream(c, false);
+        }
+        APP_DBG("Audio from %s opened\n", id.c_str());
+    }, id);
+
+    auto dc = pc->createDataChannel("control");
+    dc->onOpen([id, wcl = make_weak_ptr(client)]() {
+        APP_DBG("[createDataChannel] open channel label\n");
+        if (auto cl = wcl.lock()) {
+            auto dc = cl->dataChannel.value();
+            APP_DBG("open channel label: %s success\n", dc->label().c_str());
+            cl->removeTimeoutConnect();
+            cl->mIsSignalingOk = true;
+            if (++Client::totalClientsConnectSuccess > CLIENT_MAX) {
+                APP_DBG("Client::totalClientsConnectSuccess > %d\n", CLIENT_MAX);
+                FATAL("RTC", 0x01);
+            }
+            APP_DBG("total client: %d\n", Client::totalClientsConnectSuccess.load());
+
+            auto pc = cl->peerConnection;
+            Candidate iceCam, iceApp;
+            if (pc->getSelectedCandidatePair(&iceCam, &iceApp)) {
+                APP_DBG("local candidate selected: %s, transport type: %d\n", iceCam.candidate().c_str(), iceCam.transportType());
+                APP_DBG("remote candidate selected: %s, transport type: %d\n", iceApp.candidate().c_str(), iceApp.transportType());
+            } else {
+                APP_DBG("get selected candidate pair failed\n");
+            }
+        }
+    });
+
+    dc->onMessage([id](auto data) {
+        if (holds_alternative<string>(data)) {
+            json dataRev = {
+                {"ClientId", id},
+                {"Data", get<string>(data)}
+            };
+            task_post_dynamic_msg(GW_TASK_WEBRTC_ID, GW_WEBRTC_ON_MESSAGE_CONTROL_DATACHANNEL_REQ, (uint8_t *)dataRev.dump().c_str(), dataRev.dump().length() + 1);
+        } else {
+            APP_DBG("Binary message from %s received, size= %d\n", id.c_str(), get<rtc::binary>(data).size());
+        }
+    });
+
+    dc->onBufferedAmountLow([id]() { APP_DBG("clientId %s send done\n", id.c_str()); });
+    client->dataChannel = dc;
+
+    return client;
+}
+
+//Track Management
+shared_ptr<ClientTrackData> addVideo(const shared_ptr<PeerConnection> pc, const uint8_t payloadType, const uint32_t ssrc, const string cname, const string msid, const function<void(void)> onOpen) {
+    auto video = Description::Video(cname, Description::Direction::SendOnly);
+    video.addH264Codec(payloadType);
+    video.addSSRC(ssrc, cname, msid, cname);
+    auto track = pc->addTrack(video);
+
+    auto rtpConfig = make_shared<RtpPacketizationConfig>(ssrc, cname, payloadType, H264RtpPacketizer::defaultClockRate);
+    auto packetizer = make_shared<H264RtpPacketizer>(NalUnit::Separator::Length, rtpConfig);
+    auto srReporter = make_shared<RtcpSrReporter>(rtpConfig);
+    packetizer->addToChain(srReporter);
+    auto nackResponder = make_shared<RtcpNackResponder>();
+    packetizer->addToChain(nackResponder);
+
+    track->setMediaHandler(packetizer);
+    track->onOpen(onOpen);
+
+    return make_shared<ClientTrackData>(track, srReporter);
+}
+
+shared_ptr<ClientTrackData> addAudio(const shared_ptr<PeerConnection> pc, const uint8_t payloadType, const uint32_t ssrc, const string cname, const string msid, const function<void(void)> onOpen, std::string id) {
+    auto audio = Description::Audio(cname, Description::Direction::SendRecv);
+    audio.addPCMACodec(payloadType);
+    audio.addSSRC(ssrc, cname, msid, cname);
+    auto track = pc->addTrack(audio);
+
+    auto rtpConfig = make_shared<RtpPacketizationConfig>(ssrc, cname, payloadType, ALAWRtpPacketizer::DefaultClockRate);
+    auto packetizer = make_shared<ALAWRtpPacketizer>(rtpConfig);
+    auto srReporter = make_shared<RtcpSrReporter>(rtpConfig);
+    packetizer->addToChain(srReporter);
+    auto nackResponder = make_shared<RtcpNackResponder>();
+    packetizer->addToChain(nackResponder);
+
+    track->setMediaHandler(packetizer);
+    track->onOpen(onOpen);
+
+    return make_shared<ClientTrackData>(track, srReporter);
+}
+
+//WebSocket Initialization and Management
 void initializeWebSocketServer(const std::string &wsUrl) {
-    // auto ws = make_shared<WebSocket>();
-    // weak_ptr<WebSocket> wws = ws;
-    globalWs = std::make_shared<WebSocket>();
-    APP_DBG("[initializeWebSocketServer]\n");
+    globalWebSocket = std::make_shared<WebSocket>();
 
-    globalWs->onOpen([&]() {
+    globalWebSocket->onOpen([&]() {
         isConnected.store(true);
-        APP_DBG("WebSocket has opened successfully.\n");
+        APP_DBG("WebSocket connected, signaling ready\n");
         timer_remove_attr(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ);
     });
 
-    globalWs->onClosed([&]() {
+    globalWebSocket->onClosed([&]() {
         isConnected.store(false);
-        APP_DBG("[WEBSOCKET_ONCLOSED] has closed unexpectedly.\n");
+        APP_DBG("WebSocket closed\n");
         timer_set(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ, GW_WEBRTC_TRY_CONNECT_SOCKET_INTERVAL, TIMER_ONE_SHOT);
     });
 
-    globalWs->onError([&](const string &error) {
+    globalWebSocket->onError([&](const string &error) {
         isConnected.store(false);
-        APP_DBG("[WEBSOCKET_ERROR] : %s\n", error.c_str());
+        APP_DBG("WebSocket connection failed: %s\n", error.c_str());
     });
 
-	globalWs->onMessage([&](variant<binary, string> data) {
-		APP_PRINT("WebSocket connection @ ws->onMessage\n");
-		if (holds_alternative<string>(data)) {
-			string msg = get<string>(data);
-			APP_DBG("%s\n", msg.data());
-			handleWebSocketMessage(msg, globalWs);  // Pass the message to the handler
-			// If needed, you can post the message here as well, depending on your application's architecture.
-		}
-	});
+    globalWebSocket->onMessage([&](variant<binary, string> data) {
+        APP_DBG("WebSocket connection @ ws->onMessage\n");
+        if (holds_alternative<string>(data)) {
+            string msg = get<string>(data);
+            APP_DBG("%s\n", msg.data());
+            handleWebSocketMessage(msg, globalWebSocket);
+        }
+    });
 
-    globalWs->open(wsUrl);
-
-
+    globalWebSocket->open(wsUrl);
 }
 
+//Configuration Loading
+//done
+int8_t loadIceServersConfigFile(Configuration &rtcConfig) {
+    rtcServersConfig_t rtcServerCfg;
+    int8_t ret = configGetRtcServers(&rtcServerCfg);
+    try {
+        if (ret == APP_CONFIG_SUCCESS) {
+            rtcConfig.iceServers.clear();
 
-
-std::string loadWebSocketConfig() {
-    std::string wsUrl;
-    if (loadWsocketSignalingServerConfigFile(wsUrl) != APP_CONFIG_SUCCESS || wsUrl.empty()) {
-        APP_DBG("Failed to load WebSocket URL configuration or URL is empty.\n");
+            APP_DBG("List stun server:\n");
+            for (const auto& url : rtcServerCfg.arrStunServerUrl) {
+                if (!url.empty()) {
+                    rtcConfig.iceServers.emplace_back(url);
+                    APP_DBG("\turl: %s\n", url.c_str());
+                }
+            }
+            APP_DBG("\nList turn server:\n");
+            for (const auto& url : rtcServerCfg.arrTurnServerUrl) {
+                if (!url.empty()) {
+                    rtcConfig.iceServers.emplace_back(url);
+                    APP_DBG("\turl: %s\n", url.c_str());
+                }
+            }
+            APP_DBG("\n");
+        }
+    } catch (const exception &error) {
+        APP_DBG("loadIceServersConfigFile %s\n", error.what());
+        ret = APP_CONFIG_ERROR_DATA_INVALID;
     }
-    APP_DBG("Websocket: %s\n", wsUrl.c_str());
-    return wsUrl;
+    return ret;
 }
 
 int8_t loadWsocketSignalingServerConfigFile(string &wsUrl) {
     rtcServersConfig_t rtcServerCfg;
-    /*Fetch the RTC server configurations stored in a JSON file
-    Then store into rtcServersConfig_t rtcServerCfg;*/
     int8_t ret = configGetRtcServers(&rtcServerCfg);
-    
-    // APP_DBG("[DEBUG] Loading WebSocket Signaling Server Config...\n");
-    
-    if (ret == APP_CONFIG_SUCCESS) {
-        // APP_DBG("[DEBUG] Successfully retrieved RTC server configuration.\n");
 
-        // Debug print to show the contents of rtcServerCfg
-        // APP_DBG("[DEBUG] WebSocket Server URL: %s\n", rtcServerCfg.wSocketServerCfg.c_str());
-        for (const auto& url : rtcServerCfg.arrStunServerUrl) {
-            // APP_DBG("[DEBUG] STUN Server URL: %s\n", url.c_str());
-        }
-        for (const auto& url : rtcServerCfg.arrTurnServerUrl) {
-            // APP_DBG("[DEBUG] TURN Server URL: %s\n", url.c_str());
-        }
-        
+    if (ret == APP_CONFIG_SUCCESS) {
         wsUrl.clear();
         if (!rtcServerCfg.wSocketServerCfg.empty()) {
-            wsUrl = rtcServerCfg.wSocketServerCfg + "/c02i24010000008"; 
-            // APP_DBG("[DEBUG] WebSocket URL constructed: %s\n", wsUrl.c_str());
+            wsUrl = rtcServerCfg.wSocketServerCfg + "/" + mtce_getSerialInfo();
+            APP_DBG("[DEBUG] WebSocket URL constructed: %s\n", wsUrl.c_str());
         } else {
             APP_DBG("[ERROR] WebSocket server configuration is empty.\n");
         }
     } else {
         APP_DBG("[ERROR] Failed to retrieve RTC server configuration. Error code: %d\n", ret);
     }
-    
+
     return ret;
 }
+//done
 
+//WebSocket Message Handling
 void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocket> ws) {
-
     APP_DBG("[WebSocket Message Received]: %s\n", message.c_str());
-    if (ws && ws ->isOpen()) {
+    if (ws && ws->isOpen()) {
         APP_DBG("safe to use\n");
     } else {
         APP_DBG("WebSocket is not open or not available.\n");
@@ -279,74 +454,248 @@ void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocke
 
     try {
         json messageJson = json::parse(message);
-        APP_DBG("Parser: %s\n", messageJson.dump(4).c_str());
+        APP_DBG("Parsed WebSocket Message: %s\n", messageJson.dump(4).c_str());
 
         auto typeIt = messageJson.find("Type");
         if (typeIt != messageJson.end()) {
-            std::string type = typeIt->get<string>();
+            string type = typeIt->get<string>();
 
             if (type == "request") {
                 auto clientIdIt = messageJson.find("ClientId");
                 if (clientIdIt != messageJson.end()) {
-                    std::string clientId = clientIdIt->get<string>();
-                    APP_DBG("Handling request for Client ID: %s\n", clientId.c_str());
+                    string clientId = clientIdIt->get<string>();
                     handleClientRequest(clientId, ws);
                 } else {
                     APP_DBG("Error: ClientId not found in request message\n");
                 }
             } else if (type == "candidate") {
-
+                APP_DBG("[Type: candidate]\n");
+                string sdp = messageJson["sdp"].get<string>();
+                string mid = messageJson["mid"].get<string>();
+                APP_DBG("Adding ICE Candidate: sdp=%s, mid=%s\n", sdp.c_str(), mid.c_str());
+                // pc->addRemoteCandidate(Candidate(sdp, mid));
             } else if (type == "answer") {
-
-            } else {
-
+                auto clientIdIt = messageJson.find("ClientId");
+                if (clientIdIt != messageJson.end()) {
+                    string clientId = clientIdIt->get<string>();
+                    handleAnswer(clientId, messageJson);
+                }
             }
         } else {
             APP_DBG("Error: Message type not specified\n");
         }
-
     } catch (const json::exception& e) {
         APP_DBG("[JSON Parsing Error] %s\n", e.what());
     }
 }
 
+//Client Request Handling
 void handleClientRequest(const std::string& clientId, std::shared_ptr<WebSocket> ws) {
     APP_DBG("Initiating peer connection for Client ID: %s\n", clientId.c_str());
+
     if (Client::totalClientsConnectSuccess <= CLIENT_MAX && clients.size() <= CLIENT_SIGNALING_MAX) {
         Client::setSignalingStatus(true);
-        std::shared_ptr<Client> newClient = createPeerConnection(rtcConfig, make_weak_ptr(ws), clientId); 
-        //shared pointer is created but not stored beyond the scope of the if block 
-        //Make strong consideration here
+        std::shared_ptr<Client> newClient = createPeerConnection(rtcConfig, make_weak_ptr(ws), clientId);
         peerConnections[clientId] = newClient->peerConnection;
         clients[clientId] = newClient;
+
+        lockMutexListClients();
+        clients.emplace(clientId, newClient);
+        auto cl = clients.at(clientId);
+        cl->startTimeoutConnect();
+        APP_DBG("Started timeout connect for client: %s\n", clientId.c_str());
+        unlockMutexListClients();
+        Client::setSignalingStatus(false);
+    } else {
+        APP_DBG("Reached max client limit. Cannot handle new request for client: %s\n", clientId.c_str());
     }
 }
 
-shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr<WebSocket> wws, const string& id) {
-    if (wws.expired()) {
-        APP_DBG("WebSocket pointer expired before creating PeerConnection for client ID: %s\n", id.c_str());
-        return nullptr;
-    } else {
-        APP_DBG("[WebSocket: ALIVE]\n");
+void handleAnswer(const std::string& id, const json& message) {
+    auto pcIter = peerConnections.find(id);
+    if (pcIter == peerConnections.end()) {
+        APP_DBG("No PeerConnection found for client ID: %s\n", id.c_str());
+        return;
     }
-    
-    APP_DBG("call createPeerConnection()\n");
-    auto pc = make_shared<PeerConnection>(rtcConfig);
-    APP_DBG("PeerConnection created successfully.\n");
-    auto client = make_shared<Client>(pc);
-    client->setId(id);
-    // APP_DBG("wait 10s\n");
-    // std::this_thread::sleep_for(std::chrono::seconds(10));
-    // APP_DBG("after waited\n");
-	pc->onStateChange([id](PeerConnection::State state) {
-		APP_DBG("State: %d\n", (int)state);
-		if (state == PeerConnection::State::Disconnected || state == PeerConnection::State::Failed || state == PeerConnection::State::Closed) {
-			// remove disconnected client
-			APP_DBG("call erase client from lib\n");
-			systemTimer.add(milliseconds(100),
-							[id](CppTime::timer_id) { task_post_dynamic_msg(GW_TASK_WEBRTC_ID, GW_WEBRTC_ERASE_CLIENT_REQ, (uint8_t *)id.c_str(), id.length() + 1); });
-		}
-	});
+    std::shared_ptr<PeerConnection>& pc = pcIter->second;
+    if (!pc) {
+        APP_DBG("PeerConnection pointer is null, cannot handle answer for client ID: %s\n", id.c_str());
+        return;
+    }
+    auto sdp = message["Sdp"].get<string>();
+    auto desRev = Description(sdp, "answer");
 
-    return client;
+    if (pc->remoteDescription().has_value()) {
+        if (desRev.iceUfrag().has_value() && desRev.icePwd().has_value() &&
+            desRev.iceUfrag().value() == pc->remoteDescription().value().iceUfrag().value() &&
+            desRev.icePwd().value() == pc->remoteDescription().value().icePwd().value()) {
+
+            auto remoteCandidates = desRev.extractCandidates();
+            for (const auto& candidate : remoteCandidates) {
+                APP_DBG("Adding ICE Candidate: %s\n", candidate.candidate().c_str());
+                pc->addRemoteCandidate(candidate);
+            }
+        } else {
+            APP_DBG("ICE credentials mismatch for client ID: %s\n", id.c_str());
+        }
+    } else {
+        try {
+            pc->setRemoteDescription(desRev);
+            APP_DBG("New session description set for client ID: %s\n", id.c_str());
+        } catch (const exception& e) {
+            APP_DBG("Error setting remote description for client ID: %s: %s\n", id.c_str(), e.what());
+        }
+    }
+}
+
+//Stream Management
+static void addToStream(shared_ptr<Client> client, bool isAddingVideo) {
+    if (client->getState() == Client::State::Waiting) {
+        client->setState(isAddingVideo ? Client::State::WaitingForAudio : Client::State::WaitingForVideo);
+    } else if ((client->getState() == Client::State::WaitingForAudio && !isAddingVideo) || (client->getState() == Client::State::WaitingForVideo && isAddingVideo)) {
+        assert(client->video.has_value() && client->audio.has_value());
+        auto video = client->video.value();
+
+        if (avStream.has_value()) {
+            // sendInitialNalus(avStream.value(), video);
+        }
+
+        client->setState(Client::State::Ready);
+    }
+    if (client->getState() == Client::State::Ready) {
+        startStream();
+    }
+}
+
+static void startStream() {
+    if (avStream.has_value()) {
+        return;
+    }
+
+    shared_ptr<Stream> stream = createStream();
+    avStream = stream;
+    stream->start();
+}
+
+static shared_ptr<Stream> createStream() {
+    mtce_encode_t encodeSetting;
+    int fps = LIVE_VIDEO_FPS;
+
+    if (mtce_configGetEncode(&encodeSetting) == APP_CONFIG_SUCCESS) {
+        fps = encodeSetting.mainFmt.format.FPS;
+    }
+
+    auto videoLive = make_shared<H26XSource>(fps);
+    auto audioLive = make_shared<AudioSource>(LIVE_AUDIO_SPS);
+    auto mediaLive = make_shared<MediaStream>(videoLive, audioLive);
+
+    auto videoPLayback = make_shared<H26XSource>(PLAYBACK_VIDEO_FPS);
+    auto audioPLayback = make_shared<AudioSource>(PLAYBACK_AUDIO_SPS);
+    auto mediaPLayback = make_shared<MediaStream>(videoPLayback, audioPLayback);
+
+    auto stream = make_shared<Stream>(mediaLive, mediaPLayback);
+
+    stream->onPbSampleHdl([ws = make_weak_ptr(stream)](StreamSourceType type, uint64_t sampleTime) {
+        bool isClientsWatchRecordExisted = false;
+        auto wsl = ws.lock();
+
+        if (!wsl) {
+            return;
+        }
+
+        lockMutexListClients();
+        for (auto it : clients) {
+            auto id = it.first;
+            auto client = it.second;
+            auto optTrackData = (type == StreamSourceType::Video) ? client->video : client->audio;
+
+            if (client->getMediaStreamOptions() != Client::eOptions::Playback) {
+                continue;
+            }
+
+            isClientsWatchRecordExisted = true;
+
+            if (client->getPbStatus() == PlayBack::ePbStatus::Playing) {
+                auto trackData = optTrackData.value();
+                auto rtpConfig = trackData->sender->rtpConfig;
+
+                SDSource* pSDSource = (type == StreamSourceType::Video) ? client->getVideoPbAttributes() : client->getAudioPbAttributes();
+                wsl->mediaPLayback->loadNextSample(pSDSource, type);
+                auto samplesSend = wsl->mediaPLayback->getSample(type);
+
+                auto elapsedSeconds = double(wsl->mediaPLayback->getSampleTime_us(type)) / (1000 * 1000);
+                uint32_t elapsedTimestamp = rtpConfig->secondsToTimestamp(elapsedSeconds);
+                rtpConfig->timestamp = rtpConfig->startTimestamp + elapsedTimestamp;
+                auto reportElapsedTimestamp = rtpConfig->timestamp - trackData->sender->lastReportedTimestamp();
+
+                if (rtpConfig->timestampToSeconds(reportElapsedTimestamp) > 1) {
+                    trackData->sender->setNeedsToReport();
+                }
+
+                if (client->getPbTimeSpentInSecs() != pSDSource->lastSecondsTick) {
+                    pSDSource->lastSecondsTick = client->getPbTimeSpentInSecs();
+
+                    json JSON;
+                    JSON["Id"] = mtce_getSerialInfo();
+                    JSON["Command"] = "Playback";
+                    JSON["Type"] = "Report";
+                    JSON["Content"]["SeekPos"] = client->getPbTimeSpentInSecs();
+                    JSON["Content"]["Status"] = client->getPbStatus();
+
+                    if (type == StreamSourceType::Video) {
+                        auto dc = client->dataChannel.value();
+                        try {
+                            if (dc->isOpen()) {
+                                dc->send(JSON.dump());
+                            }
+                        } catch (const exception& error) {
+                            APP_DBG("Exception sending playback report to client %s: %s\n", id.c_str(), error.what());
+                        }
+                    }
+                }
+
+                try {
+                    trackData->track->send(samplesSend);
+                } catch (const exception& error) {
+                    APP_DBG("Exception sending samples to track for client %s: %s\n", id.c_str(), error.what());
+                }
+
+                wsl->mediaPLayback->rstSample(type);
+            }
+        }
+
+        unlockMutexListClients();
+
+        if (!isClientsWatchRecordExisted) {
+            wsl->pendingPbSession();
+        }
+    });
+
+    return stream;
+}
+
+//Periodic Client Check
+void periodicClientCheck() {
+    for (const auto& clientPair : clients) {
+        auto client = clientPair.second;
+        if (client) {
+            if (!client->isAlive()) {
+                APP_DBG("Client with ID: %s is no longer alive.\n", clientPair.first.c_str());
+                // Handle client disconnection or cleanup
+            } else {
+                APP_DBG("Client with ID: %s is still alive.\n", clientPair.first.c_str());
+            }
+        } else {
+            APP_DBG("Client with ID: %s is null.\n", clientPair.first.c_str());
+        }
+    }
+}
+
+void startPeriodicCheck() {
+    std::thread([]() {
+        while (true) {
+            periodicClientCheck();
+            std::this_thread::sleep_for(std::chrono::seconds(3)); // Check every 3 seconds
+        }
+    }).detach();
 }

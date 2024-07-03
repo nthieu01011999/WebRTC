@@ -127,158 +127,6 @@ static size_t write_file_function(void *ptr, size_t size, size_t nmemb, void *st
 	return written;
 }
 
-bool download_json(const string &link, json &response, unsigned long timeout) {
-	CURL *curl_handle;
-	string http_respone_string;
-	long http_response_code = 0;
-	bool return_state		= false;
-
-	/* Initialise the library */
-	ERR_load_crypto_strings();
-	OpenSSL_add_all_algorithms();
-	OPENSSL_config(NULL);
-
-	// curl_global_init(CURL_GLOBAL_DEFAULT);
-	curl_handle = curl_easy_init();
-
-	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0);
-	curl_easy_setopt(curl_handle, CURLOPT_URL, link.data());
-	if (timeout > 0) {
-		curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, timeout);
-	}
-	curl_easy_setopt(curl_handle, CURLOPT_VERBOSE, 0L);
-	curl_easy_setopt(curl_handle, CURLOPT_NOPROGRESS, 1L);
-	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_string_function);
-	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, &http_respone_string);
-
-	CURLcode curl_code = curl_easy_perform(curl_handle);
-	curl_easy_getinfo(curl_handle, CURLINFO_RESPONSE_CODE, &http_response_code);
-
-	if (http_response_code == 200 && curl_code != CURLE_ABORTED_BY_CALLBACK) {
-		try {
-			response	 = json::parse(http_respone_string.data());
-			return_state = true;
-		}
-		catch (const exception &e) {
-			(void)e;
-			SYS_DBG("json::parse(): %s\n", http_respone_string.data());
-		}
-	}
-	else {
-		SYS_DBG("http_response_code: %ld\n", http_response_code);
-		SYS_DBG("link: %s\n", link.data());
-		SYS_DBG("error: %s\n", curl_easy_strerror(curl_code));
-	}
-
-	curl_easy_cleanup(curl_handle);
-	// curl_global_cleanup();
-
-	return return_state;
-}
-
-bool download_file(const string &link, const string &filename, unsigned long timeout) {
-	CURL *curl_handle;
-	FILE *file;
-	long http_response_code = 0;
-	bool return_state		= false;
-
-	/* Initialise the library */
-	ERR_load_crypto_strings();
-	OpenSSL_add_all_algorithms();
-	OPENSSL_config(NULL);
-
-	// curl_global_init(CURL_GLOBAL_DEFAULT);
-	curl_handle = curl_easy_init();
-
-	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0);
-	curl_easy_setopt(curl_handle, CURLOPT_URL, link.data());
-	if (timeout > 0) {
-		curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, timeout);
-	}
-	curl_easy_setopt(curl_handle, CURLOPT_VERBOSE, 0L);
-	curl_easy_setopt(curl_handle, CURLOPT_NOPROGRESS, 1L);
-	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_file_function);
-
-	file = fopen(filename.data(), "wb");
-	if (file) {
-		curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, file);
-
-		CURLcode curl_code = curl_easy_perform(curl_handle);
-		curl_easy_getinfo(curl_handle, CURLINFO_RESPONSE_CODE, &http_response_code);
-
-		if (http_response_code == 200 && curl_code != CURLE_ABORTED_BY_CALLBACK) {
-			return_state = true;
-		}
-		else {
-			SYS_DBG("http_response_code: %ld\n", http_response_code);
-			SYS_DBG("link: %s\n", link.data());
-			SYS_DBG("error: %s\n", curl_easy_strerror(curl_code));
-		}
-
-		fclose(file);
-	}
-
-	curl_easy_cleanup(curl_handle);
-	// curl_global_cleanup();
-
-	return return_state;
-}
-
-long download_file_with_data_req(const string &link, const string &filename, string &datasend, unsigned long timeout) {
-	CURL *curl_handle;
-	FILE *file;
-	long http_response_code = 0;
-	long return_state		= -1;
-
-	/* Initialise the library */
-	ERR_load_crypto_strings();
-	OpenSSL_add_all_algorithms();
-	OPENSSL_config(NULL);
-
-	// curl_global_init(CURL_GLOBAL_DEFAULT);
-	curl_handle = curl_easy_init();
-
-	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0);
-	curl_easy_setopt(curl_handle, CURLOPT_URL, link.data());
-
-	/* size of the POST data */
-	curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDSIZE, datasend.length());
-
-	/* pass in a pointer to the data - libcurl will not copy */
-	curl_easy_setopt(curl_handle, CURLOPT_POSTFIELDS, datasend.data());
-
-	if (timeout > 0) {
-		curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, timeout);
-	}
-	curl_easy_setopt(curl_handle, CURLOPT_VERBOSE, 0L);
-	curl_easy_setopt(curl_handle, CURLOPT_NOPROGRESS, 1L);
-	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_file_function);
-
-	file = fopen(filename.data(), "wb");
-	if (file) {
-		curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, file);
-
-		CURLcode curl_code = curl_easy_perform(curl_handle);
-		curl_easy_getinfo(curl_handle, CURLINFO_RESPONSE_CODE, &http_response_code);
-
-		if (http_response_code == 200 && curl_code != CURLE_ABORTED_BY_CALLBACK) {
-			/* OK nothing */
-		}
-		else {
-			SYS_DBG("http_response_code: %ld\n", http_response_code);
-			SYS_DBG("link: %s\n", link.data());
-			SYS_DBG("error: %s\n", curl_easy_strerror(curl_code));
-		}
-		return_state = http_response_code;
-		fclose(file);
-	}
-
-	curl_easy_cleanup(curl_handle);
-	// curl_global_cleanup();
-
-	return return_state;
-}
-
 void erase_all_string(string &main_string, string &erase_string) {
 	size_t pos = string::npos;
 	while ((pos = main_string.find(erase_string)) != string::npos) {
@@ -578,11 +426,10 @@ int systemCmd(const char *fmt, ...) {
 	va_start(args, fmt);
 	vsprintf(buf, fmt, args);
 	va_end(args);
-	APP_DBG("cmd: %s\n", fmt);
+
 	ret = system(buf);
-	if (ret != 0) {
+	if (ret != 0)
 		APP_DBG("run cmd [%s] failed\n", buf);
-	}
 
 	return ret;
 }

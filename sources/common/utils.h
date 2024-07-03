@@ -15,10 +15,6 @@ extern bool write_json_file(const json data, const string &filename);
 extern bool read_raw_file(string &data, const string &filename);
 extern bool read_json_file(json &data, const string &filename);
 
-extern bool download_json(const string &link, json &response, unsigned long timeout);
-extern bool download_file(const string &link, const string &filename, unsigned long timeout);
-extern long download_file_with_data_req(const string &link, const string &filename, string &datasend, unsigned long timeout);
-
 extern void erase_all_string(string &main_string, string &erase_string);
 extern void replace_all_string(string &main_string, string &find_string, string &repl_string);
 

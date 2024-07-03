@@ -4,12 +4,10 @@
 #include <stdio.h>
 #include "sys_dbg.h"
 
-#define APP_DBG_EN		  1
-#define APP_PRINT_EN	  1
-#define APP_ERR_EN		  0
-#define APP_DBG_SIG_EN	  1
-#define APP_DBG_DRIVER_EN 0
-#define APP_LOG_EN		  0
+#define APP_DBG_EN	   1
+#define APP_PRINT_EN   1
+#define APP_ERR_EN	   1
+#define APP_DBG_SIG_EN 1
 
 /* module debug */
 #define SD_DEBUG	 0
@@ -21,16 +19,10 @@
 #define APP_PRINT(fmt, ...)
 #endif
 
-#if !defined(RELEASE) && (APP_DBG_EN == 1)
+#if (APP_DBG_EN == 1) && (RELEASE == 0)
 #define APP_DBG(fmt, ...) __LOG__(fmt, "APP_DBG", ##__VA_ARGS__)
 #else
 #define APP_DBG(fmt, ...)
-#endif
-
-#if !defined(RELEASE) && (APP_DBG_DRIVER_EN == 1)
-#define APP_DRIVER(fmt, ...) __LOG__(fmt, "APP_DRIVER", ##__VA_ARGS__)
-#else
-#define APP_DRIVER(fmt, ...)
 #endif
 
 #if (APP_ERR_EN == 1)
@@ -50,17 +42,4 @@
 #define APP_DBG_SIG(fmt, ...)
 #endif
 
-#if (APP_LOG_EN == 1)
-#define APP_LOG_INFO	PLOG_INFO_(PLOG_APP_INSTANCE_ID)
-#define APP_LOG_WARNING PLOG_WARNING_(PLOG_APP_INSTANCE_ID)
-#define APP_LOG_ERROR	PLOG_ERROR_(PLOG_APP_INSTANCE_ID)
-#define APP_LOG_FATAL	PLOG_FATAL_(PLOG_APP_INSTANCE_ID)
-#else
-#define APP_LOG_INFO	PLOG_NONE_(PLOG_APP_INSTANCE_ID)
-#define APP_LOG_WARNING PLOG_NONE_(PLOG_APP_INSTANCE_ID)
-#define APP_LOG_ERROR	PLOG_NONE_(PLOG_APP_INSTANCE_ID)
-#define APP_LOG_FATAL	PLOG_NONE_(PLOG_APP_INSTANCE_ID)
-#endif
-
 #endif	  //__APP_DBG_H__
-

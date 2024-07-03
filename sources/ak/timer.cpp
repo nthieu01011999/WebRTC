@@ -105,7 +105,6 @@ void timer_handler(sigval_t) {
 }
 
 void *timer_entry(void *) {
-	AK_TIMER_DBG("[DEBUG] Timer service started.\n");
 	timer_service.head = NULL;
 	timer_service.tail = NULL;
 
@@ -132,7 +131,6 @@ void *timer_entry(void *) {
 
 	return (void *)0;
 }
-
 uint32_t timer_set(uint32_t root_task_id, uint32_t des_task_id, uint32_t sig, uint32_t duty, timer_type_t timer_type) {
 	AK_TIMER_DBG("[TIMER][timer_set] des_task_id:%d sig:%d duty:%d timer_type:%d\n", des_task_id, sig, duty, timer_type);
 

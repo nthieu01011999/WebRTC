@@ -270,10 +270,9 @@ namespace CppTime {
 						// Remove time event
 						time_events.erase(time_events.begin());
 
-						auto tempHandler = events[te.ref].handler;
 						// Invoke the handler
 						lock.unlock();
-						tempHandler(te.ref);
+						events[te.ref].handler(te.ref);
 						lock.lock();
 
 						if (events[te.ref].valid && events[te.ref].period.count() > 0) {

@@ -7,18 +7,18 @@
 #include <vector>
 #include <string>
 #include "ak.h"
-// #include "mtce_parameter.h"
+#include "mtce_parameter.h"
 #include "helpers.hpp"
-// #include "mtce_video.hpp"
+#include "mtce_video.hpp"
 #define TEST_USE_WEB_SOCKET 1
 #define CHECK_TIME_EXE		0
 
 extern ClientsGroup_t clients;
 
-// typedef struct {
-// 	char clientId[30];
-// 	char msg[200];
-// } DataChannelSend_t;
+typedef struct {
+	char clientId[30];
+	char msg[200];
+} DataChannelSend_t;
 
 typedef struct {
 	std::string wSocketServerCfg; // store urls signaling
@@ -31,5 +31,23 @@ typedef struct {
 		arrTurnServerUrl.clear();
 	}
 } rtcServersConfig_t;
+
+
+extern optional<shared_ptr<Stream>> avStream;
+extern void lockMutexListClients();
+extern void unlockMutexListClients();
+extern void sendMsgControlDataChannel(const string &id, const string &msg);
+extern std::string mtce_getSerialInfo();
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern void printMemoryUsage();
+extern void onSampleVideoCapture(int channel, uint8_t *bytes, uint32_t nbBytes);
+// extern void onSampleAudioALawCapture(uint8_t *bytes, uint32_t nbBytes);
+// extern void onSampleAudioAACCapture(uint8_t *bytes, uint32_t nbBytes);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __APP_DATA_H__ */

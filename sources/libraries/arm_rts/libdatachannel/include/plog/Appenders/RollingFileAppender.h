@@ -4,7 +4,6 @@
 #include <plog/Converters/NativeEOLConverter.h>
 #include <plog/Util.h>
 #include <algorithm>
-#include <string.h>
 
 namespace plog
 {
@@ -49,27 +48,6 @@ namespace plog
             }
 
             size_t bytesWritten = m_file.write(Converter::convert(Formatter::format(record)));
-
-            if (static_cast<size_t>(-1) != bytesWritten)
-            {
-                m_fileSize += bytesWritten;
-            }
-        }
-
-        void writeStr(std::string record) {
-            util::MutexLock lock(m_mutex);
-
-            if (m_firstWrite)
-            {
-                openLogFile();
-                m_firstWrite = false;
-            }
-            else if (m_maxFiles > 0 && m_fileSize > m_maxFileSize && static_cast<size_t>(-1) != m_fileSize)
-            {
-                rollLogFiles();
-            }
-
-            size_t bytesWritten = m_file.write(record);
 
             if (static_cast<size_t>(-1) != bytesWritten)
             {
