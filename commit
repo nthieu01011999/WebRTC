@@ -1,4 +1,4 @@
 #!/bin/bash
 git add .
-git commit -m"repare"
+git commit -m"adding keepalive"
 git push origin master

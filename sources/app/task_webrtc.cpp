@@ -27,7 +27,6 @@
 #include "app_dbg.h"
 #include "datachannel_hdl.h"
 #include "task_list.h"
-#include "helpers.hpp"
 #include "rtc/rtc.hpp"
 #include "json.hpp"
 #include "stream.hpp"
@@ -52,6 +51,7 @@ q_msg_t gw_task_webrtc_mailbox;
 std::shared_ptr<WebSocket> globalWebSocket;
 static Configuration rtcConfig;
 std::unordered_map<std::string, std::shared_ptr<PeerConnection>> peerConnections;
+// std::unordered_map<std::string, std::shared_ptr<Client>> clients;
 atomic<bool> isConnected(false);
 
 // Function declarations
@@ -59,6 +59,7 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
 static int8_t loadWsocketSignalingServerConfigFile(string &wsUrl);
 static int8_t loadIceServersConfigFile(Configuration &rtcConfig);
 
+void initializeWebSocketServer(const std::string &wsUrl);
 void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocket> ws);
 void handleClientRequest(const std::string& clientId, std::shared_ptr<WebSocket> ws);
 void handleAnswer(const std::string& id, const json& message);
@@ -71,9 +72,10 @@ static shared_ptr<ClientTrackData> addAudio(const shared_ptr<PeerConnection> pc,
 void periodicClientCheck();
 void startPeriodicCheck();
 
-void initializeWebSocketServer(const std::string &wsUrl);
+void sendHeartbeat(const std::shared_ptr<WebSocket>& ws);
+void startHeartbeatTimer(const std::shared_ptr<WebSocket>& ws);
 
-//done
+
 void *gw_task_webrtc_entry(void *) {
     ak_msg_t *msg = AK_MSG_NULL;
 
@@ -91,46 +93,21 @@ void *gw_task_webrtc_entry(void *) {
     weak_ptr<WebSocket> wws = ws;
     atomic<bool> isConnected(false);
 
-    initializeWebSocketServer("ws://sig.espitek.com:8089/" + mtce_getSerialInfo());
-
+    initializeWebSocketServer("ws://sig.espitek.com:8089/c02i24010000008");
     std::this_thread::sleep_for(1s);
 
-    if (isConnected.load()) {
-        APP_PRINT("WebSocket is successfully connected.\n");
-    } else {
-        APP_PRINT("WebSocket connection failed or is still in progress.\n");
-    }
-
     startPeriodicCheck();
-
     while (1) {
         msg = ak_msg_rev(GW_TASK_WEBRTC_ID);
 
         switch (msg->header->sig) {
         case GW_WEBRTC_ERASE_CLIENT_REQ: {
-            APP_DBG_SIG("GW_WEBRTC_ERASE_CLIENT_REQ\n");
-            string id((char *)msg->header->payload);
-            APP_PRINT("clear client id: %s\n", id.c_str());
-            Client::setSignalingStatus(true);
-            lockMutexListClients();
-            clients.erase(id);
-            unlockMutexListClients();
-            Client::setSignalingStatus(false);
+            // Handle client erasure request
         } break;
 
         case GW_WEBRTC_ON_MESSAGE_CONTROL_DATACHANNEL_REQ: {
             APP_DBG_SIG("GW_WEBRTC_ON_MESSAGE_CONTROL_DATACHANNEL_REQ\n");
-            try {
-                json message = json::parse(string((char *)msg->header->payload, msg->header->len));
-                string id = message["ClientId"].get<string>();
-                string data = message["Data"].get<string>();
-                string resp = "";
-                APP_DBG("client id: %s, msg: %s\n", id.c_str(), data.c_str());
-                onDataChannelHdl(id, data, resp);
-                sendMsgControlDataChannel(id, resp);
-            } catch (const exception &error) {
-                APP_DBG("%s\n", error.what());
-            }
+            // Handle control data channel message
         } break;
 
         default:
@@ -143,9 +120,159 @@ void *gw_task_webrtc_entry(void *) {
 
     return (void *)0;
 }
-//done
 
-//PeerConnection Creation and Management
+// WebSocket Initialization and Management
+void initializeWebSocketServer(const std::string &wsUrl) {
+    globalWebSocket = std::make_shared<WebSocket>();
+
+    globalWebSocket->onOpen([&]() {
+        isConnected.store(true);
+        APP_DBG("WebSocket connected, signaling ready\n");
+        timer_remove_attr(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ);
+        startHeartbeatTimer(globalWebSocket);
+    });
+
+    globalWebSocket->onClosed([&]() {
+        isConnected.store(false);
+        APP_DBG("WebSocket closed\n");
+        timer_set(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ, GW_WEBRTC_TRY_CONNECT_SOCKET_INTERVAL, TIMER_ONE_SHOT);
+    });
+
+    globalWebSocket->onError([&](const string &error) {
+        isConnected.store(false);
+        APP_DBG("WebSocket connection failed: %s\n", error.c_str());
+    });
+
+    globalWebSocket->onMessage([&](variant<binary, string> data) {
+        APP_DBG("WebSocket connection @ ws->onMessage\n");
+        if (holds_alternative<string>(data)) {
+            string msg = get<string>(data);
+            APP_DBG("%s\n", msg.data());
+            handleWebSocketMessage(msg, globalWebSocket);
+        }
+    });
+
+    globalWebSocket->open(wsUrl);
+}
+
+void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocket> ws) {
+    APP_DBG("[handleWebSocketMessage]\n");
+    if (ws && ws->isOpen()) {
+        APP_DBG("safe to use\n");
+    } else {
+        APP_DBG("WebSocket is not open or not available.\n");
+    }
+
+    try {
+        json messageJson = json::parse(message);
+        APP_DBG("Parsed WebSocket Message: %s\n", messageJson.dump(4).c_str());
+
+        auto typeIt = messageJson.find("Type");
+        if (typeIt != messageJson.end()) {
+            std::string type = typeIt->get<string>();
+            if (type == "request") {
+                auto clientIdIt = messageJson.find("ClientId");
+                if (clientIdIt != messageJson.end()) {
+                    std::string clientId = clientIdIt->get<string>();
+                    handleClientRequest(clientId, ws);
+                }
+            } else if (type == "candidate") {
+                APP_DBG("[Type: candidate]\n");
+                // Handle candidate message
+            } else if (type == "answer") {
+                APP_DBG("[Type: answer]\n");
+                // Handle answer message
+            } else if (type == "heartbeat") {
+                APP_DBG("Heartbeat response received\n");
+                // Handle heartbeat response
+            } else {
+                APP_DBG("Error: Message type not specified\n");
+            }
+        }
+    } catch (const json::exception& e) {
+        APP_DBG("JSON parsing error: %s\n", e.what());
+    }
+}
+
+int8_t loadIceServersConfigFile(Configuration &rtcConfig) {
+    rtcServersConfig_t rtcServerCfg;
+    int8_t ret = configGetRtcServers(&rtcServerCfg);
+    try {
+        if (ret == APP_CONFIG_SUCCESS) {
+            rtcConfig.iceServers.clear();
+
+            APP_DBG("List stun server:\n");
+            for (const auto& url : rtcServerCfg.arrStunServerUrl) {
+                if (!url.empty()) {
+                    rtcConfig.iceServers.emplace_back(url);
+                    APP_DBG("\turl: %s\n", url.c_str());
+                }
+            }
+            APP_DBG("\nList turn server:\n");
+            for (const auto& url : rtcServerCfg.arrTurnServerUrl) {
+                if (!url.empty()) {
+                    rtcConfig.iceServers.emplace_back(url);
+                    APP_DBG("\turl: %s\n", url.c_str());
+                }
+            }
+            APP_DBG("\n");
+        }
+    } catch (const exception &error) {
+        APP_DBG("loadIceServersConfigFile %s\n", error.what());
+        ret = APP_CONFIG_ERROR_DATA_INVALID;
+    }
+    return ret;
+}
+
+void periodicClientCheck() {
+    for (const auto& clientPair : clients) {
+        auto client = clientPair.second;
+        if (client) {
+            if (!client->isAlive()) {
+                APP_DBG("Client with ID: %s is no longer alive.\n", clientPair.first.c_str());
+                // Handle client disconnection or cleanup
+            } else {
+                APP_DBG("Client with ID: %s is still alive.\n", clientPair.first.c_str());
+            }
+        } else {
+            APP_DBG("Client with ID: %s is null.\n", clientPair.first.c_str());
+        }
+    }
+}
+
+void startPeriodicCheck() {
+    std::thread([]() {
+        while (true) {
+            periodicClientCheck();
+            std::this_thread::sleep_for(std::chrono::seconds(3)); // Check every 3 seconds
+        }
+    }).detach();
+}
+
+void handleClientRequest(const std::string& clientId, std::shared_ptr<WebSocket> ws) {
+    APP_DBG("Initiating peer connection for Client ID: %s\n", clientId.c_str());
+
+    if (Client::totalClientsConnectSuccess <= CLIENT_MAX && clients.size() <= CLIENT_SIGNALING_MAX) {
+        Client::setSignalingStatus(true);
+        std::shared_ptr<Client> newClient = createPeerConnection(rtcConfig, make_weak_ptr(ws), clientId);
+        peerConnections[clientId] = newClient->peerConnection;
+        clients[clientId] = newClient;
+
+        lockMutexListClients();
+        clients.emplace(clientId, newClient);
+        auto cl = clients.at(clientId);
+        cl->startTimeoutConnect();
+        APP_DBG("Started timeout connect for client: %s\n", clientId.c_str());
+        unlockMutexListClients();
+        Client::setSignalingStatus(false);
+
+        startHeartbeatTimer(ws);
+    } else {
+        APP_DBG("Reached max client limit. Cannot handle new request for client: %s\n", clientId.c_str());
+    }
+}
+
+// PeerConnection Creation and Management
 shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr<WebSocket> wws, const string& id) {
     if (wws.expired()) {
         APP_DBG("WebSocket pointer expired before creating PeerConnection for client ID: %s\n", id.c_str());
@@ -232,15 +359,15 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
             APP_DBG("PeerConnection weak pointer expired for client: %s.\n", id.c_str());
             return;
         }
-        
+
         auto lockedPc = wpc.lock();
         if (!lockedPc) {
             APP_DBG("Failed to lock PeerConnection for client: %s.\n", id.c_str());
             return;
         }
-        
+
         APP_DBG("PeerConnection locked successfully for client: %s.\n", id.c_str());
-        
+
         json message = {
             {"Type", "candidate"},
             {"Candidate", candidate.candidate()},
@@ -260,22 +387,7 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
         }
     });
 
-    client->video = addVideo(pc, 102, 1, "VideoStream", "Stream", [id, wc = make_weak_ptr(client)]() {
-        APP_DBG("[addVideo] open addVideo label\n");
-        if (auto c = wc.lock()) {
-            addToStream(c, true);
-        }
-        APP_DBG("Video from %s opened\n", id.c_str());
-    });
-
-    client->audio = addAudio(pc, 8, 2, "AudioStream", "Stream", [id, wc = make_weak_ptr(client)]() {
-        APP_DBG("[addAudio] open addAudio label\n");
-        if (auto c = wc.lock()) {
-            addToStream(c, false);
-        }
-        APP_DBG("Audio from %s opened\n", id.c_str());
-    }, id);
-
+    // Ensure data channel and media tracks are created and assigned
     auto dc = pc->createDataChannel("control");
     dc->onOpen([id, wcl = make_weak_ptr(client)]() {
         APP_DBG("[createDataChannel] open channel label\n");
@@ -316,386 +428,40 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
     dc->onBufferedAmountLow([id]() { APP_DBG("clientId %s send done\n", id.c_str()); });
     client->dataChannel = dc;
 
+    // // Add placeholder media tracks to keep the connection alive
+    // client->video = addVideo(pc, 102, 1, "VideoStream", "Stream", [id, wc = make_weak_ptr(client)]() {
+    //     APP_DBG("[addVideo] open addVideo label\n");
+    //     if (auto c = wc.lock()) {
+    //         addToStream(c, true);
+    //     }
+    //     APP_DBG("Video from %s opened\n", id.c_str());
+    // });
+
+    // client->audio = addAudio(pc, 8, 2, "AudioStream", "Stream", [id, wc = make_weak_ptr(client)]() {
+    //     APP_DBG("[addAudio] open addAudio label\n");
+    //     if (auto c = wc.lock()) {
+    //         addToStream(c, false);
+    //     }
+    //     APP_DBG("Audio from %s opened\n", id.c_str());
+    // }, id);
+
     return client;
 }
 
-//Track Management
-shared_ptr<ClientTrackData> addVideo(const shared_ptr<PeerConnection> pc, const uint8_t payloadType, const uint32_t ssrc, const string cname, const string msid, const function<void(void)> onOpen) {
-    auto video = Description::Video(cname, Description::Direction::SendOnly);
-    video.addH264Codec(payloadType);
-    video.addSSRC(ssrc, cname, msid, cname);
-    auto track = pc->addTrack(video);
-
-    auto rtpConfig = make_shared<RtpPacketizationConfig>(ssrc, cname, payloadType, H264RtpPacketizer::defaultClockRate);
-    auto packetizer = make_shared<H264RtpPacketizer>(NalUnit::Separator::Length, rtpConfig);
-    auto srReporter = make_shared<RtcpSrReporter>(rtpConfig);
-    packetizer->addToChain(srReporter);
-    auto nackResponder = make_shared<RtcpNackResponder>();
-    packetizer->addToChain(nackResponder);
-
-    track->setMediaHandler(packetizer);
-    track->onOpen(onOpen);
-
-    return make_shared<ClientTrackData>(track, srReporter);
-}
-
-shared_ptr<ClientTrackData> addAudio(const shared_ptr<PeerConnection> pc, const uint8_t payloadType, const uint32_t ssrc, const string cname, const string msid, const function<void(void)> onOpen, std::string id) {
-    auto audio = Description::Audio(cname, Description::Direction::SendRecv);
-    audio.addPCMACodec(payloadType);
-    audio.addSSRC(ssrc, cname, msid, cname);
-    auto track = pc->addTrack(audio);
-
-    auto rtpConfig = make_shared<RtpPacketizationConfig>(ssrc, cname, payloadType, ALAWRtpPacketizer::DefaultClockRate);
-    auto packetizer = make_shared<ALAWRtpPacketizer>(rtpConfig);
-    auto srReporter = make_shared<RtcpSrReporter>(rtpConfig);
-    packetizer->addToChain(srReporter);
-    auto nackResponder = make_shared<RtcpNackResponder>();
-    packetizer->addToChain(nackResponder);
-
-    track->setMediaHandler(packetizer);
-    track->onOpen(onOpen);
-
-    return make_shared<ClientTrackData>(track, srReporter);
-}
-
-//WebSocket Initialization and Management
-void initializeWebSocketServer(const std::string &wsUrl) {
-    globalWebSocket = std::make_shared<WebSocket>();
-
-    globalWebSocket->onOpen([&]() {
-        isConnected.store(true);
-        APP_DBG("WebSocket connected, signaling ready\n");
-        timer_remove_attr(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ);
-    });
-
-    globalWebSocket->onClosed([&]() {
-        isConnected.store(false);
-        APP_DBG("WebSocket closed\n");
-        timer_set(GW_TASK_WEBRTC_ID, GW_WEBRTC_TRY_CONNECT_SOCKET_REQ, GW_WEBRTC_TRY_CONNECT_SOCKET_INTERVAL, TIMER_ONE_SHOT);
-    });
-
-    globalWebSocket->onError([&](const string &error) {
-        isConnected.store(false);
-        APP_DBG("WebSocket connection failed: %s\n", error.c_str());
-    });
-
-    globalWebSocket->onMessage([&](variant<binary, string> data) {
-        APP_DBG("WebSocket connection @ ws->onMessage\n");
-        if (holds_alternative<string>(data)) {
-            string msg = get<string>(data);
-            APP_DBG("%s\n", msg.data());
-            handleWebSocketMessage(msg, globalWebSocket);
-        }
-    });
-
-    globalWebSocket->open(wsUrl);
-}
-
-//Configuration Loading
-//done
-int8_t loadIceServersConfigFile(Configuration &rtcConfig) {
-    rtcServersConfig_t rtcServerCfg;
-    int8_t ret = configGetRtcServers(&rtcServerCfg);
-    try {
-        if (ret == APP_CONFIG_SUCCESS) {
-            rtcConfig.iceServers.clear();
-
-            APP_DBG("List stun server:\n");
-            for (const auto& url : rtcServerCfg.arrStunServerUrl) {
-                if (!url.empty()) {
-                    rtcConfig.iceServers.emplace_back(url);
-                    APP_DBG("\turl: %s\n", url.c_str());
-                }
-            }
-            APP_DBG("\nList turn server:\n");
-            for (const auto& url : rtcServerCfg.arrTurnServerUrl) {
-                if (!url.empty()) {
-                    rtcConfig.iceServers.emplace_back(url);
-                    APP_DBG("\turl: %s\n", url.c_str());
-                }
-            }
-            APP_DBG("\n");
-        }
-    } catch (const exception &error) {
-        APP_DBG("loadIceServersConfigFile %s\n", error.what());
-        ret = APP_CONFIG_ERROR_DATA_INVALID;
-    }
-    return ret;
-}
-
-int8_t loadWsocketSignalingServerConfigFile(string &wsUrl) {
-    rtcServersConfig_t rtcServerCfg;
-    int8_t ret = configGetRtcServers(&rtcServerCfg);
-
-    if (ret == APP_CONFIG_SUCCESS) {
-        wsUrl.clear();
-        if (!rtcServerCfg.wSocketServerCfg.empty()) {
-            wsUrl = rtcServerCfg.wSocketServerCfg + "/" + mtce_getSerialInfo();
-            APP_DBG("[DEBUG] WebSocket URL constructed: %s\n", wsUrl.c_str());
-        } else {
-            APP_DBG("[ERROR] WebSocket server configuration is empty.\n");
-        }
-    } else {
-        APP_DBG("[ERROR] Failed to retrieve RTC server configuration. Error code: %d\n", ret);
-    }
-
-    return ret;
-}
-//done
-
-//WebSocket Message Handling
-void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocket> ws) {
-    APP_DBG("[WebSocket Message Received]: %s\n", message.c_str());
+void sendHeartbeat(const std::shared_ptr<WebSocket>& ws) {
     if (ws && ws->isOpen()) {
-        APP_DBG("safe to use\n");
-    } else {
-        APP_DBG("WebSocket is not open or not available.\n");
-    }
-
-    try {
-        json messageJson = json::parse(message);
-        APP_DBG("Parsed WebSocket Message: %s\n", messageJson.dump(4).c_str());
-
-        auto typeIt = messageJson.find("Type");
-        if (typeIt != messageJson.end()) {
-            string type = typeIt->get<string>();
-
-            if (type == "request") {
-                auto clientIdIt = messageJson.find("ClientId");
-                if (clientIdIt != messageJson.end()) {
-                    string clientId = clientIdIt->get<string>();
-                    handleClientRequest(clientId, ws);
-                } else {
-                    APP_DBG("Error: ClientId not found in request message\n");
-                }
-            } else if (type == "candidate") {
-                APP_DBG("[Type: candidate]\n");
-                string sdp = messageJson["sdp"].get<string>();
-                string mid = messageJson["mid"].get<string>();
-                APP_DBG("Adding ICE Candidate: sdp=%s, mid=%s\n", sdp.c_str(), mid.c_str());
-                // pc->addRemoteCandidate(Candidate(sdp, mid));
-            } else if (type == "answer") {
-                auto clientIdIt = messageJson.find("ClientId");
-                if (clientIdIt != messageJson.end()) {
-                    string clientId = clientIdIt->get<string>();
-                    handleAnswer(clientId, messageJson);
-                }
-            }
-        } else {
-            APP_DBG("Error: Message type not specified\n");
-        }
-    } catch (const json::exception& e) {
-        APP_DBG("[JSON Parsing Error] %s\n", e.what());
+        json heartbeatMessage = {
+            {"Type", "heartbeat"}
+        };
+        ws->send(heartbeatMessage.dump());
     }
 }
 
-//Client Request Handling
-void handleClientRequest(const std::string& clientId, std::shared_ptr<WebSocket> ws) {
-    APP_DBG("Initiating peer connection for Client ID: %s\n", clientId.c_str());
-
-    if (Client::totalClientsConnectSuccess <= CLIENT_MAX && clients.size() <= CLIENT_SIGNALING_MAX) {
-        Client::setSignalingStatus(true);
-        std::shared_ptr<Client> newClient = createPeerConnection(rtcConfig, make_weak_ptr(ws), clientId);
-        peerConnections[clientId] = newClient->peerConnection;
-        clients[clientId] = newClient;
-
-        lockMutexListClients();
-        clients.emplace(clientId, newClient);
-        auto cl = clients.at(clientId);
-        cl->startTimeoutConnect();
-        APP_DBG("Started timeout connect for client: %s\n", clientId.c_str());
-        unlockMutexListClients();
-        Client::setSignalingStatus(false);
-    } else {
-        APP_DBG("Reached max client limit. Cannot handle new request for client: %s\n", clientId.c_str());
-    }
-}
-
-void handleAnswer(const std::string& id, const json& message) {
-    auto pcIter = peerConnections.find(id);
-    if (pcIter == peerConnections.end()) {
-        APP_DBG("No PeerConnection found for client ID: %s\n", id.c_str());
-        return;
-    }
-    std::shared_ptr<PeerConnection>& pc = pcIter->second;
-    if (!pc) {
-        APP_DBG("PeerConnection pointer is null, cannot handle answer for client ID: %s\n", id.c_str());
-        return;
-    }
-    auto sdp = message["Sdp"].get<string>();
-    auto desRev = Description(sdp, "answer");
-
-    if (pc->remoteDescription().has_value()) {
-        if (desRev.iceUfrag().has_value() && desRev.icePwd().has_value() &&
-            desRev.iceUfrag().value() == pc->remoteDescription().value().iceUfrag().value() &&
-            desRev.icePwd().value() == pc->remoteDescription().value().icePwd().value()) {
-
-            auto remoteCandidates = desRev.extractCandidates();
-            for (const auto& candidate : remoteCandidates) {
-                APP_DBG("Adding ICE Candidate: %s\n", candidate.candidate().c_str());
-                pc->addRemoteCandidate(candidate);
-            }
-        } else {
-            APP_DBG("ICE credentials mismatch for client ID: %s\n", id.c_str());
-        }
-    } else {
-        try {
-            pc->setRemoteDescription(desRev);
-            APP_DBG("New session description set for client ID: %s\n", id.c_str());
-        } catch (const exception& e) {
-            APP_DBG("Error setting remote description for client ID: %s: %s\n", id.c_str(), e.what());
-        }
-    }
-}
-
-//Stream Management
-static void addToStream(shared_ptr<Client> client, bool isAddingVideo) {
-    if (client->getState() == Client::State::Waiting) {
-        client->setState(isAddingVideo ? Client::State::WaitingForAudio : Client::State::WaitingForVideo);
-    } else if ((client->getState() == Client::State::WaitingForAudio && !isAddingVideo) || (client->getState() == Client::State::WaitingForVideo && isAddingVideo)) {
-        assert(client->video.has_value() && client->audio.has_value());
-        auto video = client->video.value();
-
-        if (avStream.has_value()) {
-            // sendInitialNalus(avStream.value(), video);
-        }
-
-        client->setState(Client::State::Ready);
-    }
-    if (client->getState() == Client::State::Ready) {
-        startStream();
-    }
-}
-
-static void startStream() {
-    if (avStream.has_value()) {
-        return;
-    }
-
-    shared_ptr<Stream> stream = createStream();
-    avStream = stream;
-    stream->start();
-}
-
-static shared_ptr<Stream> createStream() {
-    mtce_encode_t encodeSetting;
-    int fps = LIVE_VIDEO_FPS;
-
-    if (mtce_configGetEncode(&encodeSetting) == APP_CONFIG_SUCCESS) {
-        fps = encodeSetting.mainFmt.format.FPS;
-    }
-
-    auto videoLive = make_shared<H26XSource>(fps);
-    auto audioLive = make_shared<AudioSource>(LIVE_AUDIO_SPS);
-    auto mediaLive = make_shared<MediaStream>(videoLive, audioLive);
-
-    auto videoPLayback = make_shared<H26XSource>(PLAYBACK_VIDEO_FPS);
-    auto audioPLayback = make_shared<AudioSource>(PLAYBACK_AUDIO_SPS);
-    auto mediaPLayback = make_shared<MediaStream>(videoPLayback, audioPLayback);
-
-    auto stream = make_shared<Stream>(mediaLive, mediaPLayback);
-
-    stream->onPbSampleHdl([ws = make_weak_ptr(stream)](StreamSourceType type, uint64_t sampleTime) {
-        bool isClientsWatchRecordExisted = false;
-        auto wsl = ws.lock();
-
-        if (!wsl) {
-            return;
-        }
-
-        lockMutexListClients();
-        for (auto it : clients) {
-            auto id = it.first;
-            auto client = it.second;
-            auto optTrackData = (type == StreamSourceType::Video) ? client->video : client->audio;
-
-            if (client->getMediaStreamOptions() != Client::eOptions::Playback) {
-                continue;
-            }
-
-            isClientsWatchRecordExisted = true;
-
-            if (client->getPbStatus() == PlayBack::ePbStatus::Playing) {
-                auto trackData = optTrackData.value();
-                auto rtpConfig = trackData->sender->rtpConfig;
-
-                SDSource* pSDSource = (type == StreamSourceType::Video) ? client->getVideoPbAttributes() : client->getAudioPbAttributes();
-                wsl->mediaPLayback->loadNextSample(pSDSource, type);
-                auto samplesSend = wsl->mediaPLayback->getSample(type);
-
-                auto elapsedSeconds = double(wsl->mediaPLayback->getSampleTime_us(type)) / (1000 * 1000);
-                uint32_t elapsedTimestamp = rtpConfig->secondsToTimestamp(elapsedSeconds);
-                rtpConfig->timestamp = rtpConfig->startTimestamp + elapsedTimestamp;
-                auto reportElapsedTimestamp = rtpConfig->timestamp - trackData->sender->lastReportedTimestamp();
-
-                if (rtpConfig->timestampToSeconds(reportElapsedTimestamp) > 1) {
-                    trackData->sender->setNeedsToReport();
-                }
-
-                if (client->getPbTimeSpentInSecs() != pSDSource->lastSecondsTick) {
-                    pSDSource->lastSecondsTick = client->getPbTimeSpentInSecs();
-
-                    json JSON;
-                    JSON["Id"] = mtce_getSerialInfo();
-                    JSON["Command"] = "Playback";
-                    JSON["Type"] = "Report";
-                    JSON["Content"]["SeekPos"] = client->getPbTimeSpentInSecs();
-                    JSON["Content"]["Status"] = client->getPbStatus();
-
-                    if (type == StreamSourceType::Video) {
-                        auto dc = client->dataChannel.value();
-                        try {
-                            if (dc->isOpen()) {
-                                dc->send(JSON.dump());
-                            }
-                        } catch (const exception& error) {
-                            APP_DBG("Exception sending playback report to client %s: %s\n", id.c_str(), error.what());
-                        }
-                    }
-                }
-
-                try {
-                    trackData->track->send(samplesSend);
-                } catch (const exception& error) {
-                    APP_DBG("Exception sending samples to track for client %s: %s\n", id.c_str(), error.what());
-                }
-
-                wsl->mediaPLayback->rstSample(type);
-            }
-        }
-
-        unlockMutexListClients();
-
-        if (!isClientsWatchRecordExisted) {
-            wsl->pendingPbSession();
-        }
-    });
-
-    return stream;
-}
-
-//Periodic Client Check
-void periodicClientCheck() {
-    for (const auto& clientPair : clients) {
-        auto client = clientPair.second;
-        if (client) {
-            if (!client->isAlive()) {
-                APP_DBG("Client with ID: %s is no longer alive.\n", clientPair.first.c_str());
-                // Handle client disconnection or cleanup
-            } else {
-                APP_DBG("Client with ID: %s is still alive.\n", clientPair.first.c_str());
-            }
-        } else {
-            APP_DBG("Client with ID: %s is null.\n", clientPair.first.c_str());
-        }
-    }
-}
-
-void startPeriodicCheck() {
-    std::thread([]() {
+void startHeartbeatTimer(const std::shared_ptr<WebSocket>& ws) {
+    std::thread([ws]() {
         while (true) {
-            periodicClientCheck();
-            std::this_thread::sleep_for(std::chrono::seconds(3)); // Check every 3 seconds
+            std::this_thread::sleep_for(std::chrono::seconds(30)); // Send heartbeat every 30 seconds
+            sendHeartbeat(ws);
         }
     }).detach();
 }
