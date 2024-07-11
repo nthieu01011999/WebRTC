@@ -110,6 +110,22 @@ void *gw_task_webrtc_entry(void *) {
             // Handle control data channel message
         } break;
 
+        // case GW_WEBRTC_ICE_CANDIDATE: {
+        //     APP_DBG_SIG("GW_WEBRTC_ICE_CANDIDATE\n");
+        //     // Assuming message_str is received in the message payload
+        //     std::string message_str(reinterpret_cast<char*>(msg->payload), msg->header->len);
+        //     std::cout << "Message String: " << message_str << std::endl;
+        // } break;
+        case GW_WEBRTC_ICE_CANDIDATE: {
+            APP_DBG_SIG("GW_WEBRTC_ICE_CANDIDATE\n");
+            if (msg->header != nullptr && msg->header->payload != nullptr) {
+                std::string message_str(reinterpret_cast<char*>(msg->header->payload), msg->header->len);
+                std::cout << "Message String: " << message_str << std::endl;
+            } else {
+                APP_DBG("Error: Message payload is null\n");
+            }
+        } break;
+
         default:
             APP_DBG_SIG("[DEBUG] Unknown message signal received: %d\n", msg->header->sig);
             break;
@@ -313,18 +329,51 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
         }
     });
 
+    pc->onLocalCandidate([id, wpc = make_weak_ptr(pc)](const Candidate &candidate) {
+        APP_DBG("Entered onLocalCandidate callback for client: %s.\n", id.c_str());
+        if (wpc.expired()) {
+            APP_DBG("PeerConnection weak pointer expired for client: %s.\n", id.c_str());
+            return;
+        }
+        
+        auto lockedPc = wpc.lock();
+        if (!lockedPc) {
+            APP_DBG("Failed to lock PeerConnection for client: %s.\n", id.c_str());
+            return;
+        }
+        
+        APP_DBG("PeerConnection locked successfully for client: %s.\n", id.c_str());
+        
+        json message = {
+            {"Type", "candidate"},
+            {"Candidate", candidate.candidate()},
+            {"SdpMid", candidate.mid()},
+            {"ClientId", id}
+        };
+        // std::cout << message.dump(4) << std::endl;
+
+        std::string message_str = message.dump();
+        APP_DBG("JSON message constructed for client: %s, message: %s\n", id.c_str(), message_str.c_str());
+
+        try {
+            task_post_dynamic_msg(GW_TASK_WEBRTC_ID, GW_WEBRTC_ICE_CANDIDATE, (uint8_t *)message_str.data(), message_str.length() + 1);
+            APP_DBG("ICE candidate message posted successfully for client: %s.\n", id.c_str());
+        } catch (const std::exception& e) {
+            APP_DBG("Exception caught while posting ICE candidate message for client: %s: %s\n", id.c_str(), e.what());
+        }
+    });
+
     pc->onGatheringStateChange([wpc = make_weak_ptr(pc), id, wws](PeerConnection::GatheringState state) {
         APP_DBG("[onGatheringStateChange] %d for Client ID: %s\n", static_cast<int>(state), id.c_str());
+
         if (state == PeerConnection::GatheringState::Complete) {
             auto pc = wpc.lock();
             if (!pc) {
-                APP_DBG("PeerConnection weak_ptr expired for client: %s.\n", id.c_str());
                 return;
             }
 
-            auto description = pc->localDescription();
-            if (!description) {
-                APP_DBG("Failed to get local description for client: %s.\n", id.c_str());
+            auto description = pc ->localDescription();
+            if(!description) {
                 return;
             }
 
@@ -333,57 +382,20 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
                 {"Type", description->typeString()},
                 {"Sdp", string(description.value())}
             };
-
-            APP_DBG("[BEFORE] Sent SDP to WebSocket: %s\n", message.dump().c_str());
+            APP_DBG("[BEFORE] Sent SDP to WebSocket:%s \n", message.dump(4).c_str());
 
             if (auto ws = wws.lock()) {
                 try {
-                    if (ws->isOpen()) {
+                    if (ws ->isOpen()) {
                         ws->send(message.dump());
-                        APP_DBG("Sent SDP to WebSocket for client: %s.\n", id.c_str());
-                    } else {
-                        APP_DBG("WebSocket is not open for client: %s.\n", id.c_str());
                     }
+
                 } catch (const std::exception& e) {
-                    APP_DBG("Exception while sending message for client: %s: %s\n", id.c_str(), e.what());
+                    APP_DBG("Exception while sending message for client: %s: %s\n", id.c_str(), e.what()); 
                 }
             } else {
                 APP_DBG("WebSocket weak_ptr expired for client: %s.\n", id.c_str());
             }
-        }
-    });
-
-    pc->onLocalCandidate([id, wpc = make_weak_ptr(pc)](const Candidate &candidate) {
-        APP_DBG("Entered onLocalCandidate callback for client: %s.\n", id.c_str());
-        if (wpc.expired()) {
-            APP_DBG("PeerConnection weak pointer expired for client: %s.\n", id.c_str());
-            return;
-        }
-
-        auto lockedPc = wpc.lock();
-        if (!lockedPc) {
-            APP_DBG("Failed to lock PeerConnection for client: %s.\n", id.c_str());
-            return;
-        }
-
-        APP_DBG("PeerConnection locked successfully for client: %s.\n", id.c_str());
-
-        json message = {
-            {"Type", "candidate"},
-            {"Candidate", candidate.candidate()},
-            {"SdpMid", candidate.mid()},
-            {"ClientId", id}
-        };
-        std::cout << message.dump(4) << std::endl;
-
-        std::string message_str = message.dump();
-        APP_DBG("JSON message constructed for client: %s, message: %s\n", id.c_str(), message_str.c_str());
-
-        try {
-            task_post_dynamic_msg(GW_TASK_HELLO_ID, GW_WEBRTC_ICE_CANDIDATE, (uint8_t *)message_str.data(), message_str.length() + 1);
-            APP_DBG("ICE candidate message posted successfully for client: %s.\n", id.c_str());
-        } catch (const std::exception& e) {
-            APP_DBG("Exception caught while posting ICE candidate message for client: %s: %s\n", id.c_str(), e.what());
         }
     });
 
