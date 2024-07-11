@@ -110,12 +110,6 @@ void *gw_task_webrtc_entry(void *) {
             // Handle control data channel message
         } break;
 
-        // case GW_WEBRTC_ICE_CANDIDATE: {
-        //     APP_DBG_SIG("GW_WEBRTC_ICE_CANDIDATE\n");
-        //     // Assuming message_str is received in the message payload
-        //     std::string message_str(reinterpret_cast<char*>(msg->payload), msg->header->len);
-        //     std::cout << "Message String: " << message_str << std::endl;
-        // } break;
         case GW_WEBRTC_ICE_CANDIDATE: {
             APP_DBG_SIG("GW_WEBRTC_ICE_CANDIDATE\n");
             if (msg->header != nullptr && msg->header->payload != nullptr) {
@@ -192,17 +186,27 @@ void handleWebSocketMessage(const std::string& message, std::shared_ptr<WebSocke
                     std::string clientId = clientIdIt->get<string>();
                     handleClientRequest(clientId, ws);
                 }
+
             } else if (type == "candidate") {
                 APP_DBG("[Type: candidate]\n");
-                // Handle candidate message
+                string sdp = messageJson["sdp"].get<string>();
+                string mid = messageJson["mid"].get<string>();
+                APP_DBG("Adding ICE Candidate: sdp=%s, mid=%s\n", sdp.c_str(), mid.c_str());
+
             } else if (type == "answer") {
                 APP_DBG("[Type: answer]\n");
-                // Handle answer message
+                auto clientIdIt = messageJson.find("ClientId");
+                if (clientIdIt != messageJson.end()) {
+                    string clientId = clientIdIt->get<string>();
+                    handleAnswer(clientId, messageJson);
+                }
+
             } else if (type == "heartbeat") {
                 APP_DBG("Heartbeat response received\n");
-                // Handle heartbeat response
+
             } else {
                 APP_DBG("Error: Message type not specified\n");
+
             }
         }
     } catch (const json::exception& e) {
@@ -399,7 +403,7 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
         }
     });
 
-    // Ensure data channel and media tracks are created and assigned
+    // // Ensure data channel and media tracks are created and assigned
     auto dc = pc->createDataChannel("control");
     dc->onOpen([id, wcl = make_weak_ptr(client)]() {
         APP_DBG("[createDataChannel] open channel label\n");
@@ -408,6 +412,8 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
             APP_DBG("open channel label: %s success\n", dc->label().c_str());
             cl->removeTimeoutConnect();
             cl->mIsSignalingOk = true;
+
+                //Manage Connection Success
             if (++Client::totalClientsConnectSuccess > CLIENT_MAX) {
                 APP_DBG("Client::totalClientsConnectSuccess > %d\n", CLIENT_MAX);
                 FATAL("RTC", 0x01);
@@ -456,7 +462,7 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
     //     }
     //     APP_DBG("Audio from %s opened\n", id.c_str());
     // }, id);
-
+    
     return client;
 }
 
@@ -477,3 +483,83 @@ void startHeartbeatTimer(const std::shared_ptr<WebSocket>& ws) {
         }
     }).detach();
 }
+
+
+void handleAnswer(const std::string& id, const json& message) {
+    auto pcIter = peerConnections.find(id);
+    if (pcIter == peerConnections.end()) {
+        APP_DBG("No PeerConnection found for client ID: %s\n", id.c_str());
+        return;
+    }
+    //pc, it's a reference to the map's stored shared_ptr.
+    //pc itself does not manage the lifetime of the PeerConnection; 
+    //it only provides access to it. The actual lifetime management is handled by the shared_ptr in peerConnections.
+    std::shared_ptr<PeerConnection>& pc = pcIter->second;
+    if (!pc) {
+        APP_DBG("PeerConnection pointer is null, cannot handle answer for client ID: %s\n", id.c_str());
+        return;
+    }
+    auto sdp = message["Sdp"].get<string>();
+    auto desRev = Description(sdp, "answer");
+
+    if (pc->remoteDescription().has_value()) {
+        if (desRev.iceUfrag().has_value() && desRev.icePwd().has_value() &&
+            desRev.iceUfrag().value() == pc->remoteDescription().value().iceUfrag().value() &&
+            desRev.icePwd().value() == pc->remoteDescription().value().icePwd().value()) {
+
+            auto remoteCandidates = desRev.extractCandidates();
+            for (const auto& candidate : remoteCandidates) {
+                APP_DBG("Adding ICE Candidate: %s\n", candidate.candidate().c_str());
+                pc->addRemoteCandidate(candidate);
+            }
+        } else {
+            APP_DBG("ICE credentials mismatch for client ID: %s\n", id.c_str());
+        }
+    } else {
+        try {
+            pc->setRemoteDescription(desRev);
+            APP_DBG("New session description set for client ID: %s\n", id.c_str());
+        } catch (const exception& e) {
+            APP_DBG("Error setting remote description for client ID: %s: %s\n", id.c_str(), e.what());
+        }
+    }
+}
+
+// +----------------+                   +-----------------+                    +---------------+                   +-------------+
+// | handleAnswer   |                   | PeerConnection  |                    | Description   |                   | Candidate   |
+// +----------------+                   +-----------------+                    +---------------+                   +-------------+
+//        |                                   |                                    |                                   |
+//        |--- find(id) --------------------->|                                    |                                   |
+//        |<----------------------------------|                                    |                                   |
+//        |                                   |                                    |                                   |
+//        |-- if (pc == null) --------------->|                                    |                                   |
+//        |                                   |                                    |                                   |
+//        |                                   |-- hasRemoteDescription() --------->|                                   |
+//        |                                   |<-----------------------------------|                                   |
+//        |                                   |                                    |                                   |
+//        |                                   |----- if (has_value()) ------------>|                                   |
+//        |                                   |                                    |                                   |
+//        |                                   |                                    |-- iceUfrag() -------------------->|
+//        |                                   |                                    |<----------------------------------|
+//        |                                   |                                    |-- icePwd() ---------------------->|
+//        |                                   |                                    |<----------------------------------|
+//        |                                   |                                    |                                   |
+//        |                                   |                                    |--- if (credentials match) ------->|
+//        |                                   |                                    |                                   |
+//        |                                   |                                    |-- extractCandidates() ----------->|
+//        |                                   |                                    |<----------------------------------|
+//        |                                   |                                    |                                   |
+//        |                                   |--- for (candidate in candidates) ->|                                   |
+//        |                                   |                                    |                                   |
+//        |                                   |                                    |---- getCandidateDetails() ------->|
+//        |                                   |                                    |<----------------------------------|
+//        |                                   |                                    |                                   |
+//        |                                   |--- addRemoteCandidate(candidate) ->|                                   |
+//        |                                   |<-----------------------------------|                                   |
+//        |                                   |                                    |                                   |
+//        |                                   |-- if (no remoteDescription) ------>|                                   |
+//        |                                   |                                    |                                   |
+//        |                                   |-- setRemoteDescription(desRev) --->|                                   |
+//        |                                   |<-----------------------------------|                                   |
+//        |                                   |                                    |                                   |
+//        +-----------------------------------+                                    +-----------------------------------+
