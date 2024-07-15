@@ -102,12 +102,29 @@ void *gw_task_webrtc_entry(void *) {
 
         switch (msg->header->sig) {
         case GW_WEBRTC_ERASE_CLIENT_REQ: {
-            // Handle client erasure request
+            APP_DBG_SIG("GW_WEBRTC_ERASE_CLIENT_REQ\n");
+            string id((char *)msg->header->payload);
+            APP_PRINT("clear client id: %s\n", id.c_str());
+            Client::setSignalingStatus(true);
+            lockMutexListClients();
+            clients.erase(id);
+            unlockMutexListClients();
+            Client::setSignalingStatus(false);
         } break;
 
         case GW_WEBRTC_ON_MESSAGE_CONTROL_DATACHANNEL_REQ: {
             APP_DBG_SIG("GW_WEBRTC_ON_MESSAGE_CONTROL_DATACHANNEL_REQ\n");
-            // Handle control data channel message
+            try {
+                json message = json::parse(string((char*)msg->header->payload, msg->header->len));
+                std::string id = message["ClientId"].get<std::string>();
+                std::string data = message["Data"].get<std::string>();
+                std::string resp = " ";
+
+                onDataChannelHdl(id, data, resp);
+                // sendMsgControlDataChannel(id, resp);
+            } catch (const std::exception &error) {
+                APP_DBG("%s\n", error.what());
+            }
         } break;
 
         case GW_WEBRTC_ICE_CANDIDATE: {
@@ -403,7 +420,22 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
         }
     });
 
-    // // Ensure data channel and media tracks are created and assigned
+    // client->video = addVideo(pc, 102, 1, "VideoStream", "Stream", [id, wc = make_weak_ptr(client)]() {
+    //     APP_DBG("[addVideo] open addVideo label\n");
+    //     if (auto c = wc.lock()) {
+    //         addToStream(c, true);
+    //     }
+    //     APP_DBG("Video from %s opened\n", id.c_str());
+    // });
+
+    // client->audio = addAudio(pc, 8, 2, "AudioStream", "Stream", [id, wc = make_weak_ptr(client)]() {
+    //     APP_DBG("[addAudio] open addAudio label\n");
+    //     if (auto c = wc.lock()) {
+    //         addToStream(c, false);
+    //     }
+    //     APP_DBG("Audio from %s opened\n", id.c_str());
+    // }, id);
+
     auto dc = pc->createDataChannel("control");
     dc->onOpen([id, wcl = make_weak_ptr(client)]() {
         APP_DBG("[createDataChannel] open channel label\n");
@@ -412,8 +444,6 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
             APP_DBG("open channel label: %s success\n", dc->label().c_str());
             cl->removeTimeoutConnect();
             cl->mIsSignalingOk = true;
-
-                //Manage Connection Success
             if (++Client::totalClientsConnectSuccess > CLIENT_MAX) {
                 APP_DBG("Client::totalClientsConnectSuccess > %d\n", CLIENT_MAX);
                 FATAL("RTC", 0x01);
@@ -446,25 +476,174 @@ shared_ptr<Client> createPeerConnection(const Configuration &rtcConfig, weak_ptr
     dc->onBufferedAmountLow([id]() { APP_DBG("clientId %s send done\n", id.c_str()); });
     client->dataChannel = dc;
 
-    // // Add placeholder media tracks to keep the connection alive
-    // client->video = addVideo(pc, 102, 1, "VideoStream", "Stream", [id, wc = make_weak_ptr(client)]() {
-    //     APP_DBG("[addVideo] open addVideo label\n");
-    //     if (auto c = wc.lock()) {
-    //         addToStream(c, true);
-    //     }
-    //     APP_DBG("Video from %s opened\n", id.c_str());
-    // });
-
-    // client->audio = addAudio(pc, 8, 2, "AudioStream", "Stream", [id, wc = make_weak_ptr(client)]() {
-    //     APP_DBG("[addAudio] open addAudio label\n");
-    //     if (auto c = wc.lock()) {
-    //         addToStream(c, false);
-    //     }
-    //     APP_DBG("Audio from %s opened\n", id.c_str());
-    // }, id);
-    
     return client;
 }
+
+// //Track Management
+// shared_ptr<ClientTrackData> addVideo(const shared_ptr<PeerConnection> pc, const uint8_t payloadType, const uint32_t ssrc, const string cname, const string msid, const function<void(void)> onOpen) {
+//     auto video = Description::Video(cname, Description::Direction::SendOnly);
+//     video.addH264Codec(payloadType);
+//     video.addSSRC(ssrc, cname, msid, cname);
+//     auto track = pc->addTrack(video);
+
+//     auto rtpConfig = make_shared<RtpPacketizationConfig>(ssrc, cname, payloadType, H264RtpPacketizer::defaultClockRate);
+//     auto packetizer = make_shared<H264RtpPacketizer>(NalUnit::Separator::Length, rtpConfig);
+//     auto srReporter = make_shared<RtcpSrReporter>(rtpConfig);
+//     packetizer->addToChain(srReporter);
+//     auto nackResponder = make_shared<RtcpNackResponder>();
+//     packetizer->addToChain(nackResponder);
+
+//     track->setMediaHandler(packetizer);
+//     track->onOpen(onOpen);
+
+//     return make_shared<ClientTrackData>(track, srReporter);
+// }
+
+// shared_ptr<ClientTrackData> addAudio(const shared_ptr<PeerConnection> pc, const uint8_t payloadType, const uint32_t ssrc, const string cname, const string msid, const function<void(void)> onOpen, std::string id) {
+//     auto audio = Description::Audio(cname, Description::Direction::SendRecv);
+//     audio.addPCMACodec(payloadType);
+//     audio.addSSRC(ssrc, cname, msid, cname);
+//     auto track = pc->addTrack(audio);
+
+//     auto rtpConfig = make_shared<RtpPacketizationConfig>(ssrc, cname, payloadType, ALAWRtpPacketizer::DefaultClockRate);
+//     auto packetizer = make_shared<ALAWRtpPacketizer>(rtpConfig);
+//     auto srReporter = make_shared<RtcpSrReporter>(rtpConfig);
+//     packetizer->addToChain(srReporter);
+//     auto nackResponder = make_shared<RtcpNackResponder>();
+//     packetizer->addToChain(nackResponder);
+
+//     track->setMediaHandler(packetizer);
+//     track->onOpen(onOpen);
+
+//     return make_shared<ClientTrackData>(track, srReporter);
+// }
+
+
+// //Stream Management
+// static void addToStream(shared_ptr<Client> client, bool isAddingVideo) {
+//     if (client->getState() == Client::State::Waiting) {
+//         client->setState(isAddingVideo ? Client::State::WaitingForAudio : Client::State::WaitingForVideo);
+//     } else if ((client->getState() == Client::State::WaitingForAudio && !isAddingVideo) || (client->getState() == Client::State::WaitingForVideo && isAddingVideo)) {
+//         assert(client->video.has_value() && client->audio.has_value());
+//         auto video = client->video.value();
+
+//         if (avStream.has_value()) {
+//             // sendInitialNalus(avStream.value(), video);
+//         }
+
+//         client->setState(Client::State::Ready);
+//     }
+//     if (client->getState() == Client::State::Ready) {
+//         startStream();
+//     }
+// }
+
+// static void startStream() {
+//     if (avStream.has_value()) {
+//         return;
+//     }
+
+//     shared_ptr<Stream> stream = createStream();
+//     avStream = stream;
+//     stream->start();
+// }
+
+// static shared_ptr<Stream> createStream() {
+//     mtce_encode_t encodeSetting;
+//     int fps = LIVE_VIDEO_FPS;
+
+//     if (mtce_configGetEncode(&encodeSetting) == APP_CONFIG_SUCCESS) {
+//         fps = encodeSetting.mainFmt.format.FPS;
+//     }
+
+//     auto videoLive = make_shared<H26XSource>(fps);
+//     auto audioLive = make_shared<AudioSource>(LIVE_AUDIO_SPS);
+//     auto mediaLive = make_shared<MediaStream>(videoLive, audioLive);
+
+//     auto videoPLayback = make_shared<H26XSource>(PLAYBACK_VIDEO_FPS);
+//     auto audioPLayback = make_shared<AudioSource>(PLAYBACK_AUDIO_SPS);
+//     auto mediaPLayback = make_shared<MediaStream>(videoPLayback, audioPLayback);
+
+//     auto stream = make_shared<Stream>(mediaLive, mediaPLayback);
+
+//     stream->onPbSampleHdl([ws = make_weak_ptr(stream)](StreamSourceType type, uint64_t sampleTime) {
+//         bool isClientsWatchRecordExisted = false;
+//         auto wsl = ws.lock();
+
+//         if (!wsl) {
+//             return;
+//         }
+
+//         lockMutexListClients();
+//         for (auto it : clients) {
+//             auto id = it.first;
+//             auto client = it.second;
+//             auto optTrackData = (type == StreamSourceType::Video) ? client->video : client->audio;
+
+//             if (client->getMediaStreamOptions() != Client::eOptions::Playback) {
+//                 continue;
+//             }
+
+//             isClientsWatchRecordExisted = true;
+
+//             if (client->getPbStatus() == PlayBack::ePbStatus::Playing) {
+//                 auto trackData = optTrackData.value();
+//                 auto rtpConfig = trackData->sender->rtpConfig;
+
+//                 SDSource* pSDSource = (type == StreamSourceType::Video) ? client->getVideoPbAttributes() : client->getAudioPbAttributes();
+//                 wsl->mediaPLayback->loadNextSample(pSDSource, type);
+//                 auto samplesSend = wsl->mediaPLayback->getSample(type);
+
+//                 auto elapsedSeconds = double(wsl->mediaPLayback->getSampleTime_us(type)) / (1000 * 1000);
+//                 uint32_t elapsedTimestamp = rtpConfig->secondsToTimestamp(elapsedSeconds);
+//                 rtpConfig->timestamp = rtpConfig->startTimestamp + elapsedTimestamp;
+//                 auto reportElapsedTimestamp = rtpConfig->timestamp - trackData->sender->lastReportedTimestamp();
+
+//                 if (rtpConfig->timestampToSeconds(reportElapsedTimestamp) > 1) {
+//                     trackData->sender->setNeedsToReport();
+//                 }
+
+//                 if (client->getPbTimeSpentInSecs() != pSDSource->lastSecondsTick) {
+//                     pSDSource->lastSecondsTick = client->getPbTimeSpentInSecs();
+
+//                     json JSON;
+//                     JSON["Id"] = mtce_getSerialInfo();
+//                     JSON["Command"] = "Playback";
+//                     JSON["Type"] = "Report";
+//                     JSON["Content"]["SeekPos"] = client->getPbTimeSpentInSecs();
+//                     JSON["Content"]["Status"] = client->getPbStatus();
+
+//                     if (type == StreamSourceType::Video) {
+//                         auto dc = client->dataChannel.value();
+//                         try {
+//                             if (dc->isOpen()) {
+//                                 dc->send(JSON.dump());
+//                             }
+//                         } catch (const exception& error) {
+//                             APP_DBG("Exception sending playback report to client %s: %s\n", id.c_str(), error.what());
+//                         }
+//                     }
+//                 }
+
+//                 try {
+//                     trackData->track->send(samplesSend);
+//                 } catch (const exception& error) {
+//                     APP_DBG("Exception sending samples to track for client %s: %s\n", id.c_str(), error.what());
+//                 }
+
+//                 wsl->mediaPLayback->rstSample(type);
+//             }
+//         }
+
+//         unlockMutexListClients();
+
+//         if (!isClientsWatchRecordExisted) {
+//             wsl->pendingPbSession();
+//         }
+//     });
+
+//     return stream;
+// }
 
 void sendHeartbeat(const std::shared_ptr<WebSocket>& ws) {
     if (ws && ws->isOpen()) {

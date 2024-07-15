@@ -30,56 +30,67 @@ using namespace rtc;
 using json = nlohmann::json;
 using namespace chrono;
 
-#define PACKET_TRANSFER_SIZE (4096)	   // 5kb - 2096, 4096, 5120, 6144, 8192, 16384, 51200
-static string qrId; /* Current client Id is queried */
+#define PACKET_TRANSFER_SIZE (4096)    // 5kb - 2096, 4096, 5120, 6144, 8192, 16384, 51200
 static int disconnectHdl(json &content, bool &respFlag);
 static int streamHdl(json &content, bool &respFlag);
 
+static string qrId; /* Current client Id is queried */
+
+
 static unordered_map<string, function<int(json &, bool &)>> dcCmdTblMaps = {
-	// {DC_CMD_PANTILT,			 panTiltHdl   },
-	//    {DC_CMD_PLAYLIST,			 playListHdl	},
-	//    {DC_CMD_PLAYBACK,			 playBackHdl	},
-	// {DC_CMD_DOWNLOAD,		  downloadHdl	 },
-	   {DC_CMD_STREAM,			   streamHdl	},
-	   {DC_CMD_DISCONNECT_REPORT, disconnectHdl},
-	// {DC_CMD_PUSH_TO_TALK,	  pushToTalk	},
+    // {DC_CMD_PANTILT,             panTiltHdl   },
+    //    {DC_CMD_PLAYLIST,             playListHdl    },
+    //    {DC_CMD_PLAYBACK,             playBackHdl    },
+    // {DC_CMD_DOWNLOAD,          downloadHdl   },
+       {DC_CMD_STREAM,               streamHdl    },
+       {DC_CMD_DISCONNECT_REPORT, disconnectHdl},
+    // {DC_CMD_PUSH_TO_TALK,      pushToTalk    },
 };
 
-void onDataChannelHdl(const string clId, const string &req, string &resp) {
-	json JSON;
-	bool boolean = true;
-	JSON		 = json::parse(req);
-
-	/* If the ID is not correct -> do notthing */
-	if (JSON["Id"].get<string>().compare(mtce_getSerialInfo()) != 0) {
-		APP_DBG("The ID %s is not correct\n", JSON["Id"].get<string>().c_str());
-		return;
-	}
-
-	/* Traverse to find valid command */
-	auto it = dcCmdTblMaps.find(JSON["Command"].get<string>());
-	boolean = (JSON["Type"].get<string>().compare("Request") == 0) ? true : false;
-	if (it != dcCmdTblMaps.end() && boolean) {
-		qrId	= clId;
-		int ret = it->second(JSON.at("Content"), boolean);
-		if (boolean) {
-			JSON["Type"]			  = "Respond";
-			JSON["Result"]["Ret"]	  = ret;
-			JSON["Result"]["Message"] = (ret == APP_CONFIG_SUCCESS ? "Success" : "Fail");
-			resp.assign(JSON.dump());
-		}
-	}
-	else {
-		APP_DBG("Invalid command %s\n", JSON["Command"].get<string>().c_str());
-	}
-}
-
 int disconnectHdl(json &content, bool &respFlag) {
-	(void)(respFlag);
-	APP_DBG("[MANUAL] clear client id: %s\n", qrId.c_str());
-	task_post_dynamic_msg(GW_TASK_WEBRTC_ID, GW_WEBRTC_ERASE_CLIENT_REQ, (uint8_t *)qrId.c_str(), qrId.length() + 1);
-	return APP_CONFIG_SUCCESS;
+    (void)(respFlag);
+    APP_DBG("[MANUAL] clear client id: %s\n", qrId.c_str());
+    task_post_dynamic_msg(GW_TASK_WEBRTC_ID, GW_WEBRTC_ERASE_CLIENT_REQ, (uint8_t *)qrId.c_str(), qrId.length() + 1);
+    return APP_CONFIG_SUCCESS;
 }
+
+
+void onDataChannelHdl(const string clId, const string &req, string &resp) {
+    json JSON;
+    bool boolean = true;
+    JSON         = json::parse(req);
+    std::cout << "Parsed JSON onDataChannelHdl: " << JSON.dump(4) << std::endl;
+    /* If the ID is not correct -> do notthing */
+    if (JSON["Id"].get<string>().compare(mtce_getSerialInfo()) != 0) {
+        APP_DBG("The ID %s is not correct\n", JSON["Id"].get<string>().c_str());
+        return;
+    }
+
+    /* Traverse to find valid command */
+    auto it = dcCmdTblMaps.find(JSON["Command"].get<string>());
+
+        std::cout << "Command found: " << it->first << std::endl;
+        std::cout << "Handler address: " << &it->second << std::endl;
+
+
+    boolean = (JSON["Type"].get<string>().compare("Request") == 0) ? true : false;
+
+    if (it != dcCmdTblMaps.end() && boolean) {
+        qrId    = clId;
+        int ret = it->second(JSON.at("Content"), boolean);
+        
+        if (boolean) {
+            JSON["Type"]              = "Respond";
+            JSON["Result"]["Ret"]     = ret;
+            JSON["Result"]["Message"] = (ret == APP_CONFIG_SUCCESS ? "Success" : "Fail");
+            resp.assign(JSON.dump());
+        }
+    }
+    else {
+        APP_DBG("Invalid command %s\n", JSON["Command"].get<string>().c_str());
+    }
+}
+
 
 int streamHdl(json &content, bool &respFlag) {
     (void)(respFlag);
@@ -133,7 +144,7 @@ int streamHdl(json &content, bool &respFlag) {
         auto videoSource = avStreamValue->mediaLive->video;
 
         // Attempt to cast the video source to an H26XSource pointer
-        H26XSource *h264 = dynamic_cast<H26XSource *>(videoSource.get());
+        H26XSource *h264 = dynamic_cast<H26XSource*>(videoSource.get());
 
         // Check if the cast was successful
         if (!h264) {

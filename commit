@@ -1,4 +1,4 @@
 #!/bin/bash
 git add .
-git commit -m"GW_WEBRTC_ON_MESSAGE_CONTROL_DATACHANNEL_REQ"
+git commit -m"done with StreamHDL"
 git push origin master

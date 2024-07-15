@@ -18,6 +18,7 @@
 #include "rtc/rtc.hpp"
 #include "stream.hpp"
 #include "streamsource.hpp"
+#include <sstream>  // Include this at the top of your file
 
 using namespace std;
 
@@ -49,6 +50,14 @@ struct ClientTrack {
 
 class Client {
 public:
+    std::string toString() const {
+        std::ostringstream oss;
+        oss << "ID: " << mId << ", State: " << static_cast<int>(mState)
+            << ", Options: " << static_cast<int>(mOptions) << ", Live Resolution: "
+            << static_cast<int>(mLiveResolution) << ", Download Flag: " << mDownloadFlag
+            << ", Total Clients Connected Successfully: " << totalClientsConnectSuccess;
+        return oss.str();
+    }
 	enum class State {
 		Waiting,
 		WaitingForVideo,
